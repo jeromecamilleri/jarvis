@@ -15,7 +15,9 @@ Machine cible : i7-8700K, 32 Go RAM, GTX 1070 8 Go.
     cp .env.example .env   # puis: set -a; . ./.env; set +a
     ollama pull qwen3:8b
     ollama pull bge-m3      # embeddings de la mémoire épisodique
+    python -m piper.download_voices fr_FR-siwis-medium --download-dir data/models/piper   # voix (≈60 Mo)
     uvicorn app.main:app --port 8000
+    # Whisper « small » (≈460 Mo) se télécharge seul à la première phrase dictée, dans data/models/whisper
 
 ## Utilisation
     curl -XPOST localhost:8000/chat -H 'Content-Type: application/json' \
@@ -37,6 +39,13 @@ API : `GET /profile`, `GET /profile/{key}`, `PUT /profile`, `DELETE /profile/{ke
 
 Questions simples (« Quel est mon employeur ? ») : réponse directe depuis SQLite, sans LLM. Les échanges
 de commandes mémoire sont enregistrés (`messages.kind = 'command'`) mais jamais renvoyés au LLM.
+
+Garde-fous de fiabilité (déterministes, sans LLM) :
+- « Que contient ta mémoire ? », « Que sais-tu de moi ? », « Qu'as-tu retenu sur moi ? » : liste du profil depuis SQLite.
+- « Enregistre… », « Mémorise… », « Rappelle-toi… », « N'oublie pas… » n'écrivent **jamais** : réponse fixe
+  rappelant « Retiens que », « Note que », « Souviens-toi que ».
+- Si Qwen prétend avoir mémorisé quelque chose, une correction est ajoutée à sa réponse (détection par regex).
+- Le prompt système distingue Jarvis (application, mémoire) de Qwen (rédaction) ; l'historique n'est jamais une source du profil.
 
 ## Mémoire épisodique (sprint 3)
 Retrouver ce qui s'est dit dans d'anciennes conversations, avec citation de la source.
@@ -93,6 +102,26 @@ puis réindexé par `backfill()` (données dérivées uniquement).
 7. Pondération/exclusion des réponses de l'assistant indexées (hallucinations possibles).
 8. Swap VRAM qwen/bge-m3 sur GPU 8 Go.
 Aussi : les mots génériques (« projet ») restent ambigus ; les résumés de conversation sont prévus plus tard.
+
+## Voix (push-to-talk)
+Ouvrir **http://localhost:8000/ui** (Chrome/Firefox, micro autorisé). Tout est local.
+- Bouton : un clic démarre, un clic arrête ; ou maintenir enfoncé (> 0,5 s) et relâcher.
+- `POST /voice/chat` (audio) : ffmpeg → faster-whisper (`small`, CPU, int8, français) → **le même orchestrateur
+  que `/chat`** (profil, commandes « Retiens que… », mémoire épisodique inchangés) → texte.
+- `POST /voice/speak` (`{"text": ...}`) : Piper (`fr_FR-siwis-medium`) → WAV. La voix lit la réponse
+  **sans la ligne « Sources : … »** et sans symboles Markdown, sans la tronquer ; l'écran garde la réponse complète.
+- Phrase vide, bruit ou « sous-titrage… » inventé par Whisper : ignorés, rien n'est envoyé à l'orchestrateur.
+- Modèles chargés à la première utilisation ; le mode texte n'est pas affecté. Whisper reste sur CPU (la VRAM est prise par Qwen).
+- Réglages : `JARVIS_WHISPER_MODEL`, `JARVIS_WHISPER_DIR`, `JARVIS_WHISPER_HINT` (vocabulaire aidant Whisper sur les
+  noms propres), `JARVIS_PIPER_VOICE`.
+- Limite : Whisper peut mal entendre un nom propre rare (« Atos » → « à taux ») ; vérifier la transcription affichée.
+  Un « Retiens que… » mal transcrit est mémorisé tel quel.
+
+Attribution : les réglages Whisper (langue, beam search, VAD) et le filtre des phrases inventées sur du bruit
+s'inspirent de `core/oreilles_locales.py` de [fredo-jarvis/jarvis-fr](https://github.com/fredo-jarvis/jarvis-fr)
+(édition de « Mark LV » par FatihMakes, licence CC BY-NC 4.0, usage non commercial). Le code est réécrit ici, non copié.
+
+Améliorations futures : voir `BACKLOG.md`.
 
 ## Tests
     pytest

@@ -28,9 +28,37 @@ MAX_KEY_WORDS = 5
 _TRAILING = " \t\n.!;"
 
 
+# « Que contient ta mémoire ? », « Que sais-tu de moi ? », « Qu'as-tu retenu sur moi ? »
+# (appliqué au texte sans accents ni ponctuation, voir _fold).
+LIST_RE = re.compile(
+    r"^(?:que|qu est ce que|quoi)\s+(?:contient|content)\s+(?:ta|ma|ton|mon)\s+(?:memoire|profil)(?:\s+personnelle)?$"
+    r"|^(?:que\s+sais\s+tu|qu est ce que tu sais|qu as tu\s+(?:retenu|memorise|note)"
+    r"|qu est ce que tu as\s+(?:retenu|memorise|note))\s+(?:de|sur|a propos de)\s+moi$"
+)
+# Demandes de mémorisation formulées hors des trois commandes acceptées : jamais d'écriture.
+_INTENT_START = (
+    r"(?:(?:jarvis\s+)?(?:peux tu|pourrais tu|veux tu|s il te plait)\s+)*"
+    r"(?:enregistre|enregistrer|en registre|un registre|memorise|memoriser|rappelle toi|n oublie pas|"
+    r"garde en memoire|sauvegarde|retiens|retenir|souviens toi|ajoute a ta memoire)\b"
+)
+INTENT_RE = re.compile(
+    rf"^{_INTENT_START}|\b(?:enregistre|enregistrer|memorise|memoriser|retenir|sauvegarde|ajoute)\b.*\bta memoire\b"
+)
+# Qwen affirme avoir écrit dans la mémoire (le profil n'est modifié que par une commande).
+CLAIM_RE = re.compile(
+    r"\b(?:je l ai|je les ai|j ai)\s+(?:bien\s+|deja\s+)?(?:enregistre|memorise|note|retenu|sauvegarde|ajoute|"
+    r"mis a jour|modifie|oublie|supprime|efface)"
+    r"|\bje (?:note|retiens|memorise|enregistre|sauvegarde)\b"
+    r"|\bje (?:vais|viens de)\s+(?:le |la |l )?(?:noter|retenir|enregistrer|memoriser|sauvegarder|mettre a jour)"
+    r"|\b(?:c est|est|a ete|ont ete)\s+(?:bien\s+|desormais\s+)?(?:note|notee|enregistre|enregistree|memorise|memorisee|"
+    r"sauvegarde|sauvegardee)\b"
+    r"|\bje m en souviendrai\b|\bbien (?:note|enregistre|memorise)\b"
+)
+
+
 @dataclass(frozen=True)
 class Command:
-    action: str  # "remember" | "forget" | "recall"
+    action: str  # "remember" | "forget" | "recall" | "list" | "memory_intent"
     key: str
     value: str | None = None
 
@@ -39,6 +67,13 @@ def normalize_key(text: str) -> str:
     text = unicodedata.normalize("NFKD", text.lower().strip(_TRAILING))
     text = "".join(c for c in text if not unicodedata.combining(c))
     return re.sub(r"[^a-z0-9]+", "_", text).strip("_")[:80]
+
+
+def _fold(text: str) -> str:
+    """Minuscules, sans accents ni ponctuation : « Qu'as-tu retenu ? » -> « qu as tu retenu »."""
+    text = unicodedata.normalize("NFKD", text.lower())
+    text = "".join(c for c in text if not unicodedata.combining(c))
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", text).split())
 
 
 def _parse_fact(text: str) -> Command | None:
@@ -73,7 +108,18 @@ def parse_command(message: str) -> Command | None:
     if m and len(m.group("key").split()) <= MAX_KEY_WORDS:
         key = normalize_key(m.group("key"))
         return Command("recall", key) if key else None
+
+    folded = _fold(message)
+    if LIST_RE.match(folded):
+        return Command("list", "")
+    if INTENT_RE.search(folded):
+        return Command("memory_intent", "")
     return None
+
+
+def claims_memory_write(reply: str) -> bool:
+    """Vrai si la réponse du LLM affirme avoir enregistré, modifié ou oublié une information."""
+    return CLAIM_RE.search(_fold(reply)) is not None
 
 
 def is_personal_statement(message: str) -> bool:
@@ -84,4 +130,15 @@ def is_personal_statement(message: str) -> bool:
 NOT_STORED_NOTICE = (
     "\n\n(Rien n'a été enregistré dans ta mémoire personnelle. "
     "Pour l'enregistrer, écris « Retiens que… ».)"
+)
+
+MEMORY_INTENT_REPLY = (
+    "Rien n'a été enregistré dans ta mémoire personnelle. Pour enregistrer une information, "
+    "dis ou écris « Retiens que… », « Note que… » ou « Souviens-toi que… »."
+)
+
+MEMORY_CLAIM_CORRECTION = (
+    "\n\nCorrection : rien n'a été enregistré, modifié ni supprimé dans ta mémoire personnelle. "
+    "Seules les commandes « Retiens que… », « Note que… », « Souviens-toi que… » et « Oublie… » "
+    "modifient le profil."
 )

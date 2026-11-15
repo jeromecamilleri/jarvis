@@ -147,7 +147,7 @@ def test_60000_char_message_fits_context_and_keeps_system_prompt(db_path):
     sent = llm.calls[-1]
     assert prompt_tokens(sent) <= cfg.num_ctx - cfg.reply_reserve
     system = sent[0]["content"]
-    assert "aucun pouvoir sur la mémoire" in system and "employeur : Atos" in system
+    assert "tu rédiges du texte" in system and "employeur : Atos" in system
     assert sent[-1]["content"].startswith("début") and sent[-1]["content"].endswith("fin")
     assert "caractères omis" in sent[-1]["content"]
     assert "très long" in r["reply"]

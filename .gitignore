@@ -5,3 +5,4 @@ __pycache__/
 data/*.db
 data/knowledge/*
 !data/knowledge/.gitkeep
+data/models/

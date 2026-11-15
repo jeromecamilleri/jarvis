@@ -3,6 +3,7 @@ import os
 from fastapi import FastAPI
 
 from app.api.chat import router
+from app.api.voice import router as voice_router
 from app.config import Settings, get_settings
 from app.core.embeddings import OllamaEmbedder
 from app.core.llm import OllamaClient
@@ -11,9 +12,11 @@ from app.memory.conversations import ConversationStore
 from app.memory.database import connect
 from app.memory.episodic import EpisodicMemory
 from app.memory.profile import ProfileStore
+from app.voice.stt import WhisperSTT
+from app.voice.tts import PiperTTS
 
 
-def create_app(settings: Settings | None = None, llm=None, embedder=None) -> FastAPI:
+def create_app(settings: Settings | None = None, llm=None, embedder=None, stt=None, tts=None) -> FastAPI:
     settings = settings or get_settings()
     app = FastAPI(title="Jarvis")
     parent = os.path.dirname(settings.db_path)
@@ -33,7 +36,11 @@ def create_app(settings: Settings | None = None, llm=None, embedder=None) -> Fas
         episodic=app.state.episodic, episodic_k=settings.episodic_k,
         num_ctx=settings.num_ctx, reply_reserve=settings.reply_reserve,
         memory_budget=settings.memory_budget)
+    app.state.stt = stt or WhisperSTT(settings.whisper_model, settings.whisper_dir,
+                                          settings.whisper_hint)
+    app.state.tts = tts or PiperTTS(settings.piper_voice)
     app.include_router(router)
+    app.include_router(voice_router)
 
     @app.get("/health")
     def health():

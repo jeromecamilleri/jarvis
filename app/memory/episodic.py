@@ -5,7 +5,7 @@ import unicodedata
 
 import numpy as np
 
-from app.core.commands import NOT_STORED_NOTICE
+from app.core.commands import MEMORY_CLAIM_CORRECTION, NOT_STORED_NOTICE
 from app.core.llm import LLMError
 from app.core.triggers import is_past_reference
 
@@ -132,8 +132,10 @@ class EpisodicMemory:
     def _index_no_embed(self, user, assistant) -> None:
         embedder, self.embedder = self.embedder, None
         try:
+            reply = assistant["content"].replace(NOT_STORED_NOTICE, "")
+            reply = reply.replace(MEMORY_CLAIM_CORRECTION, "")
             self.index_exchange(user["conversation_id"], user["id"], assistant["id"],
-                                user["content"], assistant["content"].replace(NOT_STORED_NOTICE, ""))
+                                user["content"], reply)
         finally:
             self.embedder = embedder
 

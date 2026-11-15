@@ -22,8 +22,9 @@ def db_path(tmp_path):
 
 @pytest.fixture
 def make_client(db_path):
-    def _make(llm=None, embedder=None):
+    def _make(llm=None, embedder=None, stt=None, tts=None):
         llm = llm or FakeLLM()
         settings = Settings(db_path=db_path, embed_model="")
-        return TestClient(create_app(settings, llm=llm, embedder=embedder)), llm
+        return TestClient(create_app(settings, llm=llm, embedder=embedder,
+                                     stt=stt, tts=tts)), llm
     return _make

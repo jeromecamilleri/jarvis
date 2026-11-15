@@ -150,9 +150,9 @@ def test_system_prompt_contains_memory_rules(make_client):
     client, llm = make_client()
     say(client, "Bonjour")
     system = llm.calls[0][0]["content"]
-    assert "aucun pouvoir sur la mémoire" in system
-    assert "Ne dis jamais que tu as mémorisé" in system
-    assert "ne sera pas conservée durablement" in system
+    assert "tu rédiges du texte" in system and "possède la mémoire personnelle" in system
+    assert "ne dis jamais que tu l'as fait" in system
+    assert "qu'elle n'est pas enregistrée" in system
     assert "Retiens que" in system and "Note que" in system
 
 

@@ -4,3 +4,6 @@ httpx
 pydantic
 pytest
 numpy
+faster-whisper
+piper-tts
+python-multipart

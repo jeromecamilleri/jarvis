@@ -1,20 +1,28 @@
-from app.core.commands import NOT_STORED_NOTICE, is_personal_statement, normalize_key, parse_command
+from app.core.commands import (MEMORY_CLAIM_CORRECTION, MEMORY_INTENT_REPLY, NOT_STORED_NOTICE,
+                               claims_memory_write, is_personal_statement, normalize_key,
+                               parse_command)
 from app.core.budget import estimate_tokens, truncate_middle
 from app.core.triggers import is_past_reference
 from app.memory.conversations import ConversationStore
 from app.memory.profile import ProfileStore
 
 SYSTEM_PROMPT = (
-    "Tu es Jarvis, un assistant personnel local. Réponds en français, de façon concise. "
-    "Tu n'as actuellement aucun outil : ni agenda, ni appels, ni messages, ni domotique, "
-    "ni accès à Internet. Ne prétends jamais avoir une fonctionnalité qui n'est pas "
-    "décrite ici ; si on te la demande, dis simplement que tu ne peux pas encore le faire. "
-    "Tu n'as aucun pouvoir sur la mémoire : tu ne peux ni enregistrer, ni modifier, ni "
-    "supprimer une information. Ne dis jamais que tu as mémorisé, noté, enregistré, "
-    "modifié ou oublié quelque chose. Si l'utilisateur donne une information personnelle "
-    "sans commande explicite, tu peux répondre normalement, mais précise que cette "
-    "information ne sera pas conservée durablement ; pour l'enregistrer, il doit écrire "
-    "« Retiens que… » ou « Note que… »."
+    "Tu es le modèle de langage qui rédige les réponses de Jarvis, un assistant personnel local. "
+    "Réponds en français, de façon concise et naturelle.\n"
+    "Rôles : l'application Jarvis possède la mémoire personnelle (base SQLite) et exécute les commandes. "
+    "« Retiens que… », « Note que… » et « Souviens-toi que… » enregistrent une information ; "
+    "« Oublie… » la supprime ; « Que contient ta mémoire ? » la liste. Toi, tu rédiges du texte : "
+    "tu lis la mémoire personnelle fournie par l'application et tu t'en sers pour répondre.\n"
+    "Informations personnelles : appuie-toi uniquement sur la mémoire personnelle fournie ci-dessous. "
+    "Les échanges précédents ne font pas partie de cette mémoire : si une information personnelle n'y "
+    "figure pas, dis qu'elle n'est pas dans la mémoire de Jarvis.\n"
+    "Quand l'utilisateur te confie une information sans commande explicite, réponds normalement et "
+    "précise qu'elle n'est pas enregistrée ; pour l'enregistrer, il peut dire « Retiens que… » ou "
+    "« Note que… ». Seule l'application enregistre, modifie ou supprime, et elle le confirme elle-même : "
+    "ne dis jamais que tu l'as fait.\n"
+    "Tu peux converser, répondre à des questions de culture générale et rédiger des textes. "
+    "L'agenda, les appels, les messages, la domotique et Internet ne sont pas encore disponibles : "
+    "n'en parle que si l'utilisateur les demande, en disant simplement que ce n'est pas encore possible."
 )
 
 
@@ -33,15 +41,19 @@ class Orchestrator:
         self.episodic, self.episodic_k = episodic, episodic_k
         self.num_ctx, self.reply_reserve, self.memory_budget = num_ctx, reply_reserve, memory_budget
 
+    @staticmethod
+    def _fact_lines(facts: dict[str, str]) -> str:
+        # Phrases libres (clé dérivée de la phrase, ou entrées du sprint 1) : valeur seule.
+        return "\n".join(
+            f"- {v}" if " " in k or normalize_key(v) == k else f"- {k.replace('_', ' ')} : {v}"
+            for k, v in facts.items()
+        )
+
     def _system_message(self) -> str:
         facts = self.profile.all()
         if not facts:
             return SYSTEM_PROMPT
-        # Phrases libres (clé dérivée de la phrase, ou entrées du sprint 1) : valeur seule.
-        lines = "\n".join(
-            f"- {v}" if " " in k or normalize_key(v) == k else f"- {k.replace('_', ' ')} : {v}"
-            for k, v in facts.items()
-        )
+        lines = self._fact_lines(facts)
         return (
             f"{SYSTEM_PROMPT}\n\nMémoire personnelle déjà enregistrée par l'utilisateur "
             "(fiable : utilise-la pour répondre aux questions le concernant) :\n"
@@ -86,6 +98,9 @@ class Orchestrator:
         if is_personal_statement(message):
             # Le LLM peut prétendre avoir mémorisé : on corrige de façon déterministe.
             reply += NOT_STORED_NOTICE
+        elif claims_memory_write(llm_reply):
+            # Aucune commande n'a écrit dans le profil : toute confirmation du LLM est fausse.
+            reply += MEMORY_CLAIM_CORRECTION
         if sources:
             reply += "\n\nSources : " + ", ".join(
                 f"conversation {c} ({d})" for c, d in self._source_labels(sources))
@@ -146,6 +161,13 @@ class Orchestrator:
 
     def _run_command(self, cmd) -> str:
         label = cmd.key.replace("_", " ")
+        if cmd.action == "memory_intent":
+            return MEMORY_INTENT_REPLY
+        if cmd.action == "list":
+            facts = self.profile.all()
+            if not facts:
+                return "Ma mémoire personnelle est vide : je n'ai encore rien retenu sur toi."
+            return "D'après ta mémoire personnelle :\n" + self._fact_lines(facts)
         if cmd.action == "recall":
             value = self.profile.get(cmd.key)
             if value is None:

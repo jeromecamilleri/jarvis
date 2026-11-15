@@ -1,6 +1,8 @@
 import os
 from dataclasses import dataclass
 
+from app.voice.stt import DEFAULT_HINT
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -10,6 +12,10 @@ class Settings:
     timeout: float = float(os.getenv("JARVIS_TIMEOUT", "120"))
     db_path: str = os.getenv("JARVIS_DB_PATH", "data/jarvis.db")
     embed_model: str = os.getenv("JARVIS_EMBED_MODEL", "bge-m3")
+    whisper_model: str = os.getenv("JARVIS_WHISPER_MODEL", "small")
+    whisper_dir: str = os.getenv("JARVIS_WHISPER_DIR", "data/models/whisper")
+    whisper_hint: str = os.getenv("JARVIS_WHISPER_HINT", DEFAULT_HINT)
+    piper_voice: str = os.getenv("JARVIS_PIPER_VOICE", "data/models/piper/fr_FR-siwis-medium.onnx")
     episodic_k: int = 5
     reply_reserve: int = 1024  # tokens gardés pour la réponse du modèle
     memory_budget: int = 1500  # tokens max de souvenirs épisodiques injectés

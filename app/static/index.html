@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jarvis</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; background: #111; color: #eee; }
+  h1 { font-weight: 500; }
+  #talk { width: 100%; padding: 1.2rem; font-size: 1.2rem; border: 0; border-radius: .6rem; background: #2563eb; color: #fff; cursor: pointer; user-select: none; touch-action: none; }
+  #talk.rec { background: #dc2626; }
+  #talk:disabled { background: #555; cursor: wait; }
+  #status { margin: .8rem 0; color: #9ca3af; min-height: 1.4em; }
+  .turn { margin: 1rem 0; padding: .8rem 1rem; border-radius: .5rem; background: #1f2937; white-space: pre-wrap; }
+  .turn .you { color: #93c5fd; }
+  .turn .bot { margin-top: .5rem; }
+  .turn .err { color: #fca5a5; }
+  label { color: #9ca3af; font-size: .9rem; }
+</style>
+</head>
+<body>
+<h1>Jarvis</h1>
+<button id="talk">🎤 Parler</button>
+<div id="status">Clique pour parler, reclique pour arrêter (ou maintiens le bouton enfoncé).</div>
+<label><input type="checkbox" id="speak" checked> Lire la réponse à voix haute</label>
+<div id="log"></div>
+<script>
+const talk = document.getElementById("talk");
+const statusEl = document.getElementById("status");
+const speakBox = document.getElementById("speak");
+const log = document.getElementById("log");
+const HOLD_MS = 500;           // appui plus long que ça : relâcher arrête l'enregistrement
+let recorder = null, chunks = [], startedAt = 0, conversationId = null, player = null;
+
+function setStatus(t) { statusEl.textContent = t; }
+
+async function start() {
+  if (player) { player.pause(); player = null; }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    setStatus("Micro inaccessible : " + e.message);
+    return;
+  }
+  chunks = [];
+  recorder = new MediaRecorder(stream);
+  recorder.ondataavailable = e => chunks.push(e.data);
+  recorder.onstop = () => {
+    stream.getTracks().forEach(t => t.stop());
+    send(new Blob(chunks, { type: recorder.mimeType }));
+  };
+  recorder.start();
+  startedAt = Date.now();
+  talk.classList.add("rec");
+  talk.textContent = "⏹ Arrêter";
+  setStatus("Je t'écoute…");
+}
+
+function stop() {
+  if (!recorder || recorder.state !== "recording") return;
+  recorder.stop();
+  talk.classList.remove("rec");
+  talk.textContent = "🎤 Parler";
+}
+
+function addTurn() {
+  const div = document.createElement("div");
+  div.className = "turn";
+  div.innerHTML = '<div class="you"></div><div class="bot"></div>';
+  log.prepend(div);
+  return { you: div.querySelector(".you"), bot: div.querySelector(".bot") };
+}
+
+async function send(blob) {
+  talk.disabled = true;
+  setStatus("Transcription et réflexion…");
+  const turn = addTurn();
+  try {
+    const form = new FormData();
+    form.append("audio", blob, "voix.webm");
+    if (conversationId !== null) form.append("conversation_id", conversationId);
+    const r = await fetch("/voice/chat", { method: "POST", body: form });
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    const data = await r.json();
+    if (!data.transcript) {
+      turn.you.textContent = "(rien entendu)";
+      setStatus("Je n'ai rien entendu, réessaie.");
+      return;
+    }
+    conversationId = data.conversation_id;
+    turn.you.textContent = "Toi : " + data.transcript;
+    turn.bot.textContent = "Jarvis : " + data.reply;
+    if (speakBox.checked) await speak(data.reply);
+    setStatus("Prêt.");
+  } catch (e) {
+    turn.bot.innerHTML = "";
+    const err = document.createElement("span");
+    err.className = "err";
+    err.textContent = "Erreur : " + e.message;
+    turn.bot.append(err);
+    setStatus("Erreur.");
+  } finally {
+    talk.disabled = false;
+  }
+}
+
+async function speak(text) {
+  setStatus("Synthèse vocale…");
+  const r = await fetch("/voice/speak", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (!r.ok) throw new Error("Synthèse vocale : " + ((await r.json()).detail || r.status));
+  player = new Audio(URL.createObjectURL(await r.blob()));
+  setStatus("Jarvis parle…");
+  await new Promise(res => { player.onended = res; player.onerror = res; player.play().catch(res); });
+}
+
+talk.addEventListener("pointerdown", e => {
+  if (e.pointerType === "mouse" && e.button !== 0) return;
+  if (recorder && recorder.state === "recording") stop();   // 2e clic : arrêt
+  else start();
+});
+talk.addEventListener("pointerup", () => {
+  if (recorder && recorder.state === "recording" && Date.now() - startedAt > HOLD_MS) stop();  // maintien relâché
+});
+talk.addEventListener("click", e => {                          // clavier (Espace/Entrée)
+  if (e.detail !== 0) return;
+  if (recorder && recorder.state === "recording") stop(); else start();
+});
+</script>
+</body>
+</html>

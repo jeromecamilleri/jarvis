@@ -17,6 +17,10 @@ class Settings:
     whisper_hint: str = os.getenv("JARVIS_WHISPER_HINT", DEFAULT_HINT)
     piper_voice: str = os.getenv("JARVIS_PIPER_VOICE", "data/models/piper/fr_FR-siwis-medium.onnx")
     audio_player: str = os.getenv("JARVIS_AUDIO_PLAYER", "pw-play")
+    timezone: str = os.getenv("JARVIS_TIMEZONE", "Europe/Paris")
+    google_credentials_path: str = os.getenv("JARVIS_GOOGLE_CREDENTIALS", "data/google_calendar/credentials.json")
+    google_token_path: str = os.getenv("JARVIS_GOOGLE_TOKEN", "data/google_calendar/token.json")
+    max_tool_rounds: int = int(os.getenv("JARVIS_MAX_TOOL_ROUNDS", "3"))
     episodic_k: int = 5
     reply_reserve: int = 1024  # tokens gardés pour la réponse du modèle
     memory_budget: int = 1500  # tokens max de souvenirs épisodiques injectés

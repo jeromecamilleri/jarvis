@@ -6,3 +6,4 @@ data/*.db
 data/knowledge/*
 !data/knowledge/.gitkeep
 data/models/
+data/google_calendar/

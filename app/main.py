@@ -8,9 +8,11 @@ from app.api.reminders import router as reminders_router
 from app.api.voice import router as voice_router
 from app.config import Settings, get_settings
 from app.core.embeddings import OllamaEmbedder
+from app.core.function_registry import FunctionRegistry
 from app.core.llm import OllamaClient
 from app.core.orchestrator import Orchestrator
 from app.core.reminders import AudioNotifier, ReminderService, utc_now
+from app.functions import calendar as google_calendar
 from app.memory.conversations import ConversationStore
 from app.memory.database import connect
 from app.memory.episodic import EpisodicMemory
@@ -21,7 +23,7 @@ from app.voice.tts import PiperTTS
 
 
 def create_app(settings: Settings | None = None, llm=None, embedder=None, stt=None, tts=None,
-               notifier=None, clock=None, tz=None) -> FastAPI:
+               notifier=None, clock=None, tz=None, functions: FunctionRegistry | None = None) -> FastAPI:
     settings = settings or get_settings()
 
     @asynccontextmanager
@@ -53,11 +55,16 @@ def create_app(settings: Settings | None = None, llm=None, embedder=None, stt=No
         app.state.reminder_store,
         notifier or AudioNotifier(app.state.tts, settings.audio_player),
         clock or utc_now, tz)
+    if functions is None:  # fonctions enregistrées explicitement au démarrage
+        functions = FunctionRegistry()
+        google_calendar.register(functions, settings)
+    app.state.functions = functions
     app.state.orchestrator = Orchestrator(
         llm, app.state.conversations, app.state.profile, settings.history_limit,
         episodic=app.state.episodic, episodic_k=settings.episodic_k,
         num_ctx=settings.num_ctx, reply_reserve=settings.reply_reserve,
-        memory_budget=settings.memory_budget, reminders=app.state.reminders)
+        memory_budget=settings.memory_budget, reminders=app.state.reminders,
+        functions=functions, max_tool_rounds=settings.max_tool_rounds, timezone=settings.timezone)
     app.include_router(router)
     app.include_router(voice_router)
     app.include_router(reminders_router)

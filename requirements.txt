@@ -8,3 +8,6 @@ faster-whisper
 piper-tts
 python-multipart
 apscheduler>=3.10,<4
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib

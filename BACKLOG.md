@@ -30,3 +30,10 @@ Améliorations non indispensables, à traiter plus tard.
 - Sonnerie persistante / commande d'arrêt, répétition (snooze).
 - Notification dans le navigateur lorsque le serveur n'a pas accès à l'audio de la session.
 - Modifier un rappel existant ; annuler par texte (« annule le rappel du linge »).
+
+## Registre de fonctions / Google Agenda
+- Fonctions `safe_write` / `sensitive` avec confirmation explicite (création d'événements).
+- Autres calendriers, plusieurs comptes Google.
+- Détection d'intention agenda déterministe (sans dépendre du choix d'outil par Qwen).
+- Ne pas indexer en mémoire épisodique les réponses issues d'outils.
+- Streaming des réponses avec outils.

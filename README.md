@@ -158,5 +158,68 @@ dans `/ui`. API : `GET /reminders`, `GET /reminders/alerts`, `POST /reminders/{i
 Garde-fou : si Qwen prétend avoir programmé une alarme (« j'ai programmé… », « je te préviendrai… »), une
 correction déterministe est ajoutée à sa réponse.
 
+## Registre de fonctions
+
+Le LLM ne fait que **demander** l'exécution d'une fonction Python explicitement enregistrée ; il n'exécute
+jamais de code. Boucle (`Orchestrator._generate`) : question → Qwen répond ou demande un appel
+(`tool_calls`) → `FunctionRegistry.execute` valide les paramètres et exécute → le résultat JSON
+(`{"ok":true,"result":…}` ou `{"ok":false,"error":…}`) retourne à Qwen (message `role: "tool"`) → réponse
+naturelle. Au plus `JARVIS_MAX_TOOL_ROUNDS` tours (3) et 3 appels par tour ; ensuite réponse forcée sans outil.
+
+Contrat (`app/core/function_registry.py`) : `FunctionSpec(name, description, handler, params, level, trigger)`,
+avec `Param(name, type, description, required, enum, minimum, maximum)` (types `string|integer|number|boolean`).
+`execute` ne lève jamais : fonction inconnue, paramètre manquant/inconnu/mal typé, erreur du handler
+(`FunctionError` = message destiné à l'utilisateur) ou bug → `ok=false`. Niveaux : `read`, `safe_write`
+(exécutés sur demande du LLM) et `sensitive` (refusé sans `confirmed=True`, non utilisé pour l'instant).
+`trigger` (regex facultative) : si la question la contient et que Qwen répond sans appeler la fonction,
+Jarvis relance une fois, puis ajoute « n'a pas été vérifiée » plutôt que de laisser passer une réponse inventée.
+Les résultats sont des **données non fiables** (jamais des instructions) et tronqués (~1500 tokens). Les
+échanges d'outils ne sont pas stockés ; seule la réponse finale l'est. Les commandes mémoire et rappels
+sont traitées avant le LLM et n'utilisent pas le registre. Jarvis injecte la date, l'heure, le décalage UTC
+et les 7 prochains jours (Qwen calcule mal les jours de la semaine).
+
+Ollama 0.40 + `qwen3:8b` (capacités `completion, tools, thinking`) : `POST /api/chat` avec `tools`, réponse
+`message.tool_calls[].function.{name, arguments}` (dict). `OllamaClient.chat()` (texte) est inchangé ;
+`chat_tools()` est ajouté. Un LLM sans `chat_tools` garde l'ancien comportement.
+
+### Ajouter une fonction
+1. Écrire un handler dans `app/functions/` (arguments simples, retourne un dict JSON-sérialisable,
+   `raise FunctionError("message clair")` pour les erreurs attendues) :
+
+        def meteo(ville: str) -> dict:
+            return {"ville": ville, "ciel": "dégagé"}
+
+2. L'enregistrer explicitement dans `create_app` (`app/main.py`) :
+
+        functions.register(FunctionSpec("meteo", "Donne la météo d'une ville.", meteo,
+                                        (Param("ville", "string", "Nom de la ville"),), level=READ))
+
+3. Ajouter un test dans `tests/` (sans réseau).
+
+## Google Agenda (lecture seule)
+Fonction `calendar_list_events(start, end, max_results)` : agenda `primary`, `events.list`
+(`singleEvents=True`, trié par début), événements horaires, journée entière (fin incluse) et récurrents
+(`recurring: true`), heures en `Europe/Paris`, titre/début/fin/lieu/description (300 car. max). Scope unique
+`https://www.googleapis.com/auth/calendar.events.readonly` : aucune écriture possible, pas de Gmail.
+
+Guide détaillé pas à pas (avec dépannage) : [GOOGLE_CALENDAR_SETUP.md](GOOGLE_CALENDAR_SETUP.md).
+
+Configuration Google Cloud :
+1. console.cloud.google.com → nouveau projet.
+2. APIs et services → Bibliothèque → activer **Google Calendar API**.
+3. Écran de consentement OAuth : type « Externe », ajouter ton compte Google comme **utilisateur test**.
+4. Identifiants → Créer → **ID client OAuth**, type **Application de bureau** → télécharger le JSON.
+5. Le placer dans `data/google_calendar/credentials.json` (dossier ignoré par Git ; chemins modifiables via
+   `JARVIS_GOOGLE_CREDENTIALS` et `JARVIS_GOOGLE_TOKEN`).
+6. Première autorisation (ouvre le navigateur) : `python -m app.functions.calendar auth` → crée `token.json`.
+7. Vérification : `python -m app.functions.calendar check` (événements des 7 prochains jours).
+
+Fichiers en 0600 (dossier 0700) ; le jeton n'est jamais transmis à Qwen ni écrit dans les journaux. Sans
+configuration, Jarvis répond que l'agenda n'est pas configuré / autorisé ; jeton expiré ou révoqué : relancer `auth`.
+
+Limites : lecture seule, calendrier principal uniquement, 30 événements max, période ≤ 1 an. Qwen peut
+encore se tromper de période ; la réponse finale (avec des infos d'agenda) est indexée dans la mémoire
+épisodique (cf. BACKLOG 7). Le flux OAuth réel n'est testé que par mocks.
+
 ## Tests
     pytest

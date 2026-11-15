@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from app.core.commands import normalize_key
 from app.core.llm import LLMError
 
 router = APIRouter()
@@ -46,14 +47,27 @@ def get_profile(state=Depends(_state)):
     return state.profile.all()
 
 
+@router.get("/profile/{key}")
+def get_profile_item(key: str, state=Depends(_state)):
+    value = state.profile.get(normalize_key(key))
+    if value is None:
+        value = state.profile.get(key)  # anciennes clés (sprint 1)
+    if value is None:
+        raise HTTPException(status_code=404, detail="Clé introuvable")
+    return {"key": normalize_key(key), "value": value}
+
+
 @router.put("/profile")
 def put_profile(req: FactRequest, state=Depends(_state)):
-    state.profile.set(req.key, req.value)
+    key = normalize_key(req.key)
+    if not key:
+        raise HTTPException(status_code=422, detail="Clé invalide")
+    state.profile.set(key, req.value)
     return state.profile.all()
 
 
 @router.delete("/profile/{key}")
 def delete_profile(key: str, state=Depends(_state)):
-    if not state.profile.delete(key):
+    if not (state.profile.delete(normalize_key(key)) or state.profile.delete(key)):
         raise HTTPException(status_code=404, detail="Clé introuvable")
     return state.profile.all()

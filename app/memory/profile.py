@@ -16,6 +16,10 @@ class ProfileStore:
         )
         self.conn.commit()
 
+    def get(self, key: str) -> str | None:
+        row = self.conn.execute("SELECT value FROM profile WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else None
+
     def delete(self, key: str) -> bool:
         cur = self.conn.execute("DELETE FROM profile WHERE key = ?", (key,))
         self.conn.commit()

@@ -21,8 +21,18 @@ Machine cible : i7-8700K, 32 Go RAM, GTX 1070 8 Go.
       -d '{"message":"Retiens que je travaille sur Kubernetes"}'
     curl localhost:8000/profile
 
-Seules les phrases « retiens que… / note que… » alimentent le profil ;
-le reste va uniquement dans l'historique. `oublie`: `DELETE /profile/{key}`.
+## Mémoire personnelle (sprint 2)
+Commandes explicites uniquement (sans LLM) ; le reste n'alimente que l'historique.
+
+| Message | Effet |
+|---|---|
+| « Retiens que mon employeur est Atos. » | `employeur = Atos` |
+| « Retiens que mon employeur est maintenant Eviden. » | remplace la valeur (« Note que… » et « Souviens-toi que… » aussi) |
+| « Mon employeur est maintenant Eviden. » | aucun effet sur le profil (historique seul) |
+| « Oublie mon employeur. » | supprime la clé (message si inconnue) |
+
+Phrases non structurables (« Retiens que je travaille sur Kubernetes ») : clé dérivée de la phrase.
+API : `GET /profile`, `GET /profile/{key}`, `PUT /profile`, `DELETE /profile/{key}`.
 
 ## Tests
     pytest

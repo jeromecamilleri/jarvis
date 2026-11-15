@@ -18,17 +18,20 @@ class ConversationStore:
         ).fetchone()
         return row is not None
 
-    def add_message(self, conversation_id: int, role: str, content: str) -> None:
+    def add_message(self, conversation_id: int, role: str, content: str,
+                    kind: str = "chat") -> None:
         self.conn.execute(
-            "INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)",
-            (conversation_id, role, content),
+            "INSERT INTO messages (conversation_id, role, content, kind) VALUES (?, ?, ?, ?)",
+            (conversation_id, role, content, kind),
         )
         self.conn.commit()
 
-    def messages(self, conversation_id: int, limit: int | None = None) -> list[dict]:
-        rows = self.conn.execute(
-            "SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY id",
-            (conversation_id,),
-        ).fetchall()
+    def messages(self, conversation_id: int, limit: int | None = None,
+                 include_commands: bool = True) -> list[dict]:
+        """Messages dans l'ordre chronologique ; kind='command' = commandes de mémoire."""
+        query = "SELECT role, content FROM messages WHERE conversation_id = ?"
+        if not include_commands:
+            query += " AND kind != 'command'"
+        rows = self.conn.execute(query + " ORDER BY id", (conversation_id,)).fetchall()
         msgs = [dict(r) for r in rows]
         return msgs[-limit:] if limit else msgs

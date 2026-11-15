@@ -123,5 +123,40 @@ s'inspirent de `core/oreilles_locales.py` de [fredo-jarvis/jarvis-fr](https://gi
 
 Améliorations futures : voir `BACKLOG.md`.
 
+## Alarmes et rappels
+Table SQLite `reminders` (indépendante du profil, de l'historique et de l'index épisodique). Commandes
+interprétées par un parseur Python déterministe, **sans Qwen** ; l'échange est enregistré en `kind='command'`
+(jamais renvoyé au LLM ni indexé). APScheduler 3.x (`AsyncIOScheduler`) ne sert qu'à réveiller le service :
+SQLite reste la source de vérité et les jobs sont recréés depuis la table à chaque démarrage.
+
+| Message | Effet |
+|---|---|
+| « Mets une alarme dans une minute. » / « Préviens-moi dans une minute. » | rappel dans 1 min |
+| « Mets un minuteur de 10 minutes. » | rappel dans 10 min |
+| « Rappelle-moi dans une heure de sortir le linge. » | message « sortir le linge » |
+| « Dans 30 minutes, rappelle-moi de vérifier le serveur. » | idem, durée en tête de phrase |
+| « Réveille-moi demain à 7 heures. » | demain 07:00 (heure locale, stocké en UTC) |
+| « Quelles alarmes sont programmées ? » | liste des rappels en attente |
+| « Annule mon rappel. » | annule le seul rappel ; s'il y en a plusieurs, demande lequel |
+| « Annule le rappel 3 » / « Annule tous mes rappels » | annulation ciblée / totale |
+
+Durées : secondes, minutes, heures, « une demi-heure », « un quart d'heure », « une heure et demie ».
+Heures : « demain / aujourd'hui à 7 heures », « 7h30 », « 8 heures du soir ». Tout le reste est jugé
+ambigu (heure sans jour, « 1h30 », « dans 3 jours », deux échéances, heure passée) : Jarvis le dit et
+**ne programme rien**. `dateparser` n'a pas été ajouté (pas de besoin concret pour la première version).
+
+Statuts : `pending` -> `fired` | `cancelled` | `missed`. Le passage `pending -> fired` est une mise à jour
+SQL atomique : une notification n'est jamais émise deux fois. Au démarrage, les rappels échus pendant l'arrêt
+passent à `missed` (jamais déclenchés, journal `WARNING`, bandeau rouge dans `/ui`) ; les rappels futurs sont reprogrammés.
+
+Notification : Piper synthétise « Rappel : <message> » puis `pw-play` la lit sur la sortie audio de la
+session de l'utilisateur qui lance Uvicorn (`JARVIS_AUDIO_PLAYER` pour changer de lecteur). Le déclenchement
+s'exécute hors de la boucle asyncio (les autres requêtes ne sont pas bloquées). Si la lecture échoue, le rappel
+reste `fired` (pas de répétition), l'erreur est écrite en base (`reminders.error`), dans les journaux et
+dans `/ui`. API : `GET /reminders`, `GET /reminders/alerts`, `POST /reminders/{id}/seen`.
+
+Garde-fou : si Qwen prétend avoir programmé une alarme (« j'ai programmé… », « je te préviendrai… »), une
+correction déterministe est ajoutée à sa réponse.
+
 ## Tests
     pytest

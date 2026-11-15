@@ -23,3 +23,10 @@ Améliorations non indispensables, à traiter plus tard.
 ## Reportés (tests vocaux)
 - Corrections automatiques de « Atos » dans la transcription (on garde la transcription brute).
 - Suppression des emojis avant Piper.
+
+## Rappels (première version)
+- Rappels récurrents, agenda, jours de la semaine (« lundi à 9 h »), « ce soir », « dans 3 jours ».
+- Formulations plus libres (évaluer `dateparser` si le besoin se confirme).
+- Sonnerie persistante / commande d'arrêt, répétition (snooze).
+- Notification dans le navigateur lorsque le serveur n'a pas accès à l'audio de la session.
+- Modifier un rappel existant ; annuler par texte (« annule le rappel du linge »).

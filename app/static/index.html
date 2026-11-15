@@ -16,6 +16,8 @@
   .turn .bot { margin-top: .5rem; }
   .turn .err { color: #fca5a5; }
   label { color: #9ca3af; font-size: .9rem; }
+  .alert { margin: 1rem 0; padding: .8rem 1rem; border-radius: .5rem; background: #78350f; }
+  .alert.missed { background: #7f1d1d; }
 </style>
 </head>
 <body>
@@ -23,6 +25,7 @@
 <button id="talk">🎤 Parler</button>
 <div id="status">Clique pour parler, reclique pour arrêter (ou maintiens le bouton enfoncé).</div>
 <label><input type="checkbox" id="speak" checked> Lire la réponse à voix haute</label>
+<div id="alerts"></div>
 <div id="log"></div>
 <script>
 const talk = document.getElementById("talk");
@@ -129,6 +132,24 @@ talk.addEventListener("click", e => {                          // clavier (Espac
   if (e.detail !== 0) return;
   if (recorder && recorder.state === "recording") stop(); else start();
 });
+
+// Rappels : l'audio est lu par le serveur ; ici, simple retour visible (déclenché / manqué / échec audio).
+const alertsEl = document.getElementById("alerts");
+async function pollAlerts() {
+  try {
+    const items = await (await fetch("/reminders/alerts")).json();
+    for (const r of items) {
+      const div = document.createElement("div");
+      div.className = "alert" + (r.status === "missed" ? " missed" : "");
+      div.textContent = (r.status === "missed" ? "Rappel manqué pendant l'arrêt de Jarvis : " : "⏰ Rappel : ")
+        + r.message + (r.error ? " (lecture audio impossible : " + r.error + ")" : "");
+      alertsEl.prepend(div);
+      await fetch("/reminders/" + r.id + "/seen", { method: "POST" });
+    }
+  } catch (e) { /* serveur momentanément indisponible */ }
+}
+pollAlerts();
+setInterval(pollAlerts, 5000);
 </script>
 </body>
 </html>

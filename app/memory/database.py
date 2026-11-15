@@ -40,6 +40,23 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
 );
 """
 
+# Rappels : table indépendante des mémoires (profil, historique, index épisodique).
+# due_at / created_at / fired_at : UTC, format fixe « YYYY-MM-DDTHH:MM:SSZ » (comparable en SQL).
+REMINDERS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS reminders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message TEXT NOT NULL,
+    due_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'fired', 'cancelled', 'missed')),
+    created_at TEXT NOT NULL,
+    fired_at TEXT,
+    seen INTEGER NOT NULL DEFAULT 0,
+    error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_reminders_status_due ON reminders (status, due_at);
+"""
+
 BUSY_TIMEOUT_S = 30
 
 
@@ -106,4 +123,5 @@ def connect(path: str) -> Database:
     db.executescript(SCHEMA)
     _migrate(db)
     db.executescript(EPISODIC_SCHEMA)
+    db.executescript(REMINDERS_SCHEMA)
     return db

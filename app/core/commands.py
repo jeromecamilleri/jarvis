@@ -54,6 +54,15 @@ CLAIM_RE = re.compile(
     r"sauvegarde|sauvegardee)\b"
     r"|\bje m en souviendrai\b|\bbien (?:note|enregistre|memorise)\b"
 )
+# Qwen affirme avoir programmé une alarme ou un rappel (seul le service de rappels le fait).
+REMINDER_CLAIM_RE = re.compile(
+    r"\b(?:j ai|je l ai|je viens de)\s+(?:bien\s+|deja\s+)?(?:programme|regle|cree|mis|configure|ajoute|enregistre|lance)"
+    r"\s+(?:une?|le|la|l|ton|votre|un)?\s*(?:alarme|rappel|minuteur|timer|reveil)"
+    r"|\b(?:alarme|rappel|minuteur|timer|reveil)\s+(?:est\s+|a ete\s+)?(?:bien\s+)?(?:programme|regle|cree|configure|enregistre|lance)e?\b"
+    r"|\bje (?:te|vous) (?:rappellerai|previendrai|reveillerai|previens)\b"
+    r"|\bje (?:te|vous) (?:rappelle|previens|reveille) (?:dans|demain|a)\b"
+    r"|\bje (?:vais|viens de) (?:te|vous) (?:rappeler|prevenir|reveiller)\b"
+)
 
 
 @dataclass(frozen=True)
@@ -122,6 +131,11 @@ def claims_memory_write(reply: str) -> bool:
     return CLAIM_RE.search(_fold(reply)) is not None
 
 
+def claims_reminder_set(reply: str) -> bool:
+    """Vrai si la réponse du LLM affirme avoir programmé une alarme ou un rappel."""
+    return REMINDER_CLAIM_RE.search(_fold(reply)) is not None
+
+
 def is_personal_statement(message: str) -> bool:
     """Phrase du type « Mon employeur est X » donnée sans commande explicite."""
     return _parse_fact(message.strip()) is not None
@@ -141,4 +155,9 @@ MEMORY_CLAIM_CORRECTION = (
     "\n\nCorrection : rien n'a été enregistré, modifié ni supprimé dans ta mémoire personnelle. "
     "Seules les commandes « Retiens que… », « Note que… », « Souviens-toi que… » et « Oublie… » "
     "modifient le profil."
+)
+
+REMINDER_CLAIM_CORRECTION = (
+    "\n\nCorrection : aucun rappel ni aucune alarme n'a été programmé par cette réponse. "
+    "Pour en créer un, dis par exemple « Rappelle-moi dans 10 minutes de… » ou « Mets une alarme dans une minute »."
 )

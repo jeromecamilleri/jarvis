@@ -16,6 +16,7 @@ class Settings:
     whisper_dir: str = os.getenv("JARVIS_WHISPER_DIR", "data/models/whisper")
     whisper_hint: str = os.getenv("JARVIS_WHISPER_HINT", DEFAULT_HINT)
     piper_voice: str = os.getenv("JARVIS_PIPER_VOICE", "data/models/piper/fr_FR-siwis-medium.onnx")
+    audio_player: str = os.getenv("JARVIS_AUDIO_PLAYER", "pw-play")
     episodic_k: int = 5
     reply_reserve: int = 1024  # tokens gardés pour la réponse du modèle
     memory_budget: int = 1500  # tokens max de souvenirs épisodiques injectés

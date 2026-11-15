@@ -1,6 +1,6 @@
 from app.core.commands import (MEMORY_CLAIM_CORRECTION, MEMORY_INTENT_REPLY, NOT_STORED_NOTICE,
-                               claims_memory_write, is_personal_statement, normalize_key,
-                               parse_command)
+                               REMINDER_CLAIM_CORRECTION, claims_memory_write, claims_reminder_set,
+                               is_personal_statement, normalize_key, parse_command)
 from app.core.budget import estimate_tokens, truncate_middle
 from app.core.triggers import is_past_reference
 from app.memory.conversations import ConversationStore
@@ -21,6 +21,9 @@ SYSTEM_PROMPT = (
     "« Note que… ». Seule l'application enregistre, modifie ou supprime, et elle le confirme elle-même : "
     "ne dis jamais que tu l'as fait.\n"
     "Tu peux converser, répondre à des questions de culture générale et rédiger des textes. "
+    "L'application Jarvis programme elle-même les alarmes et rappels (« Mets une alarme dans une minute », "
+    "« Rappelle-moi dans une heure de… », « Quelles alarmes sont programmées ? ») : tu ne programmes "
+    "rien, ne dis jamais qu'un rappel est créé, et suggère ces formulations si l'utilisateur le demande.\n"
     "L'agenda, les appels, les messages, la domotique et Internet ne sont pas encore disponibles : "
     "n'en parle que si l'utilisateur les demande, en disant simplement que ce n'est pas encore possible."
 )
@@ -35,9 +38,11 @@ TRUNCATED_NOTICE = (
 class Orchestrator:
     def __init__(self, llm, conversations: ConversationStore, profile: ProfileStore,
                  history_limit: int = 20, episodic=None, episodic_k: int = 5,
-                 num_ctx: int = 8192, reply_reserve: int = 1024, memory_budget: int = 1500):
+                 num_ctx: int = 8192, reply_reserve: int = 1024, memory_budget: int = 1500,
+                 reminders=None):
         self.llm, self.conversations, self.profile = llm, conversations, profile
         self.history_limit = history_limit
+        self.reminders = reminders
         self.episodic, self.episodic_k = episodic, episodic_k
         self.num_ctx, self.reply_reserve, self.memory_budget = num_ctx, reply_reserve, memory_budget
 
@@ -65,8 +70,12 @@ class Orchestrator:
             conversation_id = self.conversations.create()
 
         cmd = parse_command(message)
+        reply = None
         if cmd:
             reply = self._run_command(cmd)
+        elif self.reminders is not None:
+            reply = self.reminders.handle(message)
+        if reply is not None:
             self.conversations.add_message(conversation_id, "user", message, "command")
             self.conversations.add_message(conversation_id, "assistant", reply, "command")
             return conversation_id, reply
@@ -98,6 +107,8 @@ class Orchestrator:
         if is_personal_statement(message):
             # Le LLM peut prétendre avoir mémorisé : on corrige de façon déterministe.
             reply += NOT_STORED_NOTICE
+        elif claims_reminder_set(llm_reply):
+            reply += REMINDER_CLAIM_CORRECTION
         elif claims_memory_write(llm_reply):
             # Aucune commande n'a écrit dans le profil : toute confirmation du LLM est fausse.
             reply += MEMORY_CLAIM_CORRECTION

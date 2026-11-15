@@ -244,6 +244,11 @@ Fonctions (enregistrées dans le registre ; `docs_search`, `docs_read` et `docs_
   indexation est déjà active, rien n'est lancé (`already_running`). Le retour est immédiat (`started: true`) mais
   l'indexation est **asynchrone** (gérée par Kensaku, sans attente ni polling dans Jarvis) : pour savoir si elle est
   terminée, demander l'état via `docs_index_state`.
+  **Garde d'intention** : le registre (`FunctionSpec.intent_guard`, mécanisme générique réutilisable pour d'autres
+  opérations sensibles) examine le message ORIGINAL de l'utilisateur ; sans ordre direct (« Réindexe mes documents »,
+  « Lance une réindexation », « Actualise l'index »), l'appel est refusé avant tout contact avec Kensaku. Sont
+  refusés : questions (« Dois-je réindexer ? »), conditionnels (« si besoin »), négations, demandes mêlées à autre
+  chose et tout cas ambigu. Le LLM reçoit une erreur lui demandant de confirmer auprès de l'utilisateur.
 Prérequis : l'indexation est assurée par le **daemon Kensaku** (`~/.local/bin/kensaku-daemon`, socket
 `$XDG_RUNTIME_DIR/kensaku.sock`, verrou d'écriture Tantivy), lancé par l'application graphique Kensaku. Jarvis ne
 parle qu'à `kensaku-cli mcp` : il ne lance jamais le daemon ni l'interface, ne touche ni au socket ni aux verrous.

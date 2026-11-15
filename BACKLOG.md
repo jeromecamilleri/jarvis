@@ -46,3 +46,9 @@ Améliorations non indispensables, à traiter plus tard.
 - Vérifier qu'un passage lu répond réellement à la question (pertinence, lecture de plusieurs passages / pagination) ; le garde-fou ne vérifie que la lecture technique.
 - Détecter le « mauvais fichier » sans nom explicite dans le message.
 - Relance du processus avec délai (backoff) si Kensaku tombe souvent.
+- Lecture documentaire capable de parcourir plusieurs passages d'un même fichier (suite / pagination de `docs_read`).
+- Réflexion sur l'actualisation automatique de l'index Kensaku (watcher fermé avec l'interface, index périmé).
+
+## Idées générales
+- Interface texte en complément de la voix.
+- Amélioration du vocabulaire technique de Whisper (termes techniques, noms de fichiers et de code).

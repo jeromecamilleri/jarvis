@@ -20,6 +20,9 @@ Comportement choisi par la variable d'environnement FAKE_MODE :
   reindex_refused  reindex répond started=false
   reindex_bad   reindex répond un JSON sans `started`
   state_error   index_state échoue (erreur JSON-RPC) après la poignée de main
+  state_partial index_state sans les champs extract_total et paused
+  indexing_str  index_state avec is_indexing="false" (chaîne)
+  indexing_missing  index_state sans is_indexing
   noisy         émet des notifications et une réponse tardive avant la bonne réponse
 Le serveur écrit les outils appelés dans FAKE_LOG (un nom par ligne) s'il est défini.
 """
@@ -63,10 +66,17 @@ for line in sys.stdin:
             if MODE == "state_error" and STATES[0] > 1:
                 reply(i, error={"code": -32000, "message": "state unavailable"})
                 continue
-            reply(i, text({"roots": [ROOT], "phase": "idle", "is_indexing": MODE == "indexing", "files": 3,
-                           "files_indexed": 3, "content_docs": 3, "content_indexed": 2, "extract_done": 1,
-                           "extract_total": 3, "semantic_units": 9, "index_bytes": 1234, "as_of": "2026-11-15T22:00:00",
-                           "paused": False, "secret_internal": "x"}))
+            state = {"roots": [ROOT], "phase": "idle", "is_indexing": MODE == "indexing", "files": 3,
+                     "files_indexed": 3, "content_docs": 3, "content_indexed": 2, "extract_done": 1,
+                     "extract_total": 3, "semantic_units": 9, "index_bytes": 1234, "as_of": "2026-11-15T22:00:00",
+                     "paused": False, "secret_internal": "x"}
+            if MODE == "state_partial":
+                del state["extract_total"], state["paused"]
+            elif MODE == "indexing_str":
+                state["is_indexing"] = "false"
+            elif MODE == "indexing_missing":
+                del state["is_indexing"]
+            reply(i, text(state))
             continue
         if MODE == "die_always" or (MODE == "die_once" and MARK and not os.path.exists(MARK)):
             if MARK:

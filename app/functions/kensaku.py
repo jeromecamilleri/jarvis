@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -77,6 +78,10 @@ class KensakuClient:
                 self._stop_locked()
                 raise
         log.info("Kensaku démarré (racines : %s)", self.roots)
+
+    def exclusive(self):
+        """Verrou de session : `with client.exclusive():` regroupe plusieurs appels sans intercalation."""
+        return self._lock
 
     def close(self) -> None:
         with self._lock:
@@ -224,21 +229,20 @@ class Kensaku:
         """Priorité aux noms de fichiers/chemins qui correspondent à la requête, sauf contenu hors sujet.
         Sans correspondance de nom, l'ordre de Kensaku est conservé (tri stable)."""
         q = _normalize(query)
-        words = [w for w in q.split() if w not in STOPWORDS and len(w) > 1]
+        words = {w for w in q.split() if w not in STOPWORDS and len(w) > 1}
         best = max((r["score"] for r in results), default=0)
         for r in results:
-            rel = _normalize(self._relative(r["path"]))
             name = _normalize(os.path.basename(r["path"]))
-            exact = bool(name) and f" {name} " in f" {q} " and bool(os.path.splitext(r["path"])[1])
-            if exact or (words and all(w in name.split() or w in name for w in words)):
+            exact = bool(name) and bool(os.path.splitext(r["path"])[1]) and f" {name} " in f" {q} "
+            # Mots entiers uniquement : « old » ne correspond pas à « folder ».
+            if exact or (words and words <= set(name.split())):
                 tier = "file"
-            elif words and any(w in rel for w in words):
+            elif words & set(_normalize(self._relative(r["path"])).split()):
                 tier = "path"
             else:
                 tier = None
-            snippet = _normalize(r["snippet"]).split()
-            on_topic = not r["snippet"] or any(w in snippet or w in " ".join(snippet) for w in words)
-            if tier and not exact and r["score"] < WEAK_SCORE * best and not (r["snippet"] and on_topic):
+            snippet_on_topic = bool(words & set(_normalize(r.get("snippet") or "").split()))
+            if tier and not exact and r["score"] < WEAK_SCORE * best and not snippet_on_topic:
                 tier = None  # nom correspondant mais score très faible et extrait absent ou sans rapport
             r["name_match"] = tier
         order = {"file": 0, "path": 1, None: 2}
@@ -277,15 +281,19 @@ class Kensaku:
         state = self.client.call_tool("index_state", {})
         if not isinstance(state, dict):
             raise FunctionError(f"{UNAVAILABLE} : état de l'index mal formé.")
-        return {k: state[k] for k in STATE_FIELDS if k in state}
+        missing = [k for k in STATE_FIELDS if k not in state]
+        if missing:
+            raise FunctionError(f"{UNAVAILABLE} : état de l'index incomplet (champs absents : {', '.join(missing)}).")
+        return {k: state[k] for k in STATE_FIELDS}
 
     def docs_reindex(self) -> dict:
         """Démarre la réindexation Kensaku (asynchrone, retour immédiat) sauf si elle est déjà en cours."""
-        with self.client._lock:  # vérification et déclenchement sans intercalation d'un autre appel
+        with self.client.exclusive():  # vérification et déclenchement sans intercalation d'un autre appel
             state = self.client.call_tool("index_state", {})
-            if not isinstance(state, dict) or "is_indexing" not in state:
-                raise FunctionError(f"{UNAVAILABLE} : état de l'index mal formé.")
-            if state["is_indexing"]:
+            indexing = state.get("is_indexing") if isinstance(state, dict) else None
+            if not isinstance(indexing, bool):
+                raise FunctionError(f"{UNAVAILABLE} : `is_indexing` absent ou invalide dans l'état de l'index.")
+            if indexing:
                 return {"started": False, "already_running": True, "message": "Une réindexation est déjà en cours."}
             data = self.client.call_tool("reindex", {})
         if not isinstance(data, dict) or data.get("started") is not True:
@@ -353,12 +361,74 @@ def register(registry: FunctionRegistry, settings, client: KensakuClient | None 
         params=(), handler=kensaku.docs_index_state, level=READ))
     registry.register(FunctionSpec(
         name="docs_reindex",
-        description=("Démarre la réindexation de l'index documentaire, UNIQUEMENT sur demande explicite de "
-                     "l'utilisateur. Ne jamais l'appeler pour une recherche documentaire normale. Elle est "
-                     "asynchrone : « started » signifie seulement qu'elle a démarré, ne dis jamais qu'elle est "
+        description=("Démarre la réindexation de l'index documentaire. À appeler UNIQUEMENT si le message de "
+                     "l'utilisateur est une demande directe de réindexer, reconstruire ou actualiser l'index "
+                     "(ex. « Réindexe mes documents »). Ne jamais l'appeler pour une recherche ou une lecture "
+                     "documentaire, ni pour une demande conditionnelle (« si besoin », « si nécessaire »), ni "
+                     "pour une question (« dois-je réindexer ? »). En cas de doute, ne pas l'appeler et "
+                     "demander confirmation à l'utilisateur. Un contrôle côté Jarvis refuse les appels sans "
+                     "demande explicite. Elle est asynchrone : « started » signifie seulement qu'elle a démarré, ne dis jamais qu'elle est "
                      "terminée ; pour le résultat, appelle docs_index_state."),
-        params=(), handler=kensaku.docs_reindex, level=SAFE_WRITE))
+        params=(), handler=kensaku.docs_reindex, level=SAFE_WRITE,
+        intent_guard=is_explicit_reindex_request,
+        intent_refusal=("Réindexation NON exécutée : l'utilisateur ne l'a pas demandée explicitement "
+                        "(demande conditionnelle, question ou ambiguë). Demande-lui de confirmer, par exemple "
+                        "« Réindexe mes documents ».")))
     return client
+
+
+_REINDEX_FILLER = {
+    "jarvis", "bonjour", "salut", "ok", "oui", "alors", "s", "il", "te", "plait", "stp", "svp", "please",
+    "merci", "maintenant"}
+_REINDEX_POLITE = (("peux", "tu"), ("pourrais", "tu"), ("tu", "peux"), ("tu", "pourrais"),
+                   ("veux", "tu", "bien"), ("voudrais", "tu"), ("est", "ce", "que", "tu", "peux"))
+_REINDEX_DIRECT = {"reindexe", "reindexez", "reindexer"}
+_REINDEX_LAUNCH = {"relance", "relancer", "lance", "lancer", "demarre", "demarrer", "declenche", "declencher"}
+_REINDEX_VERBS = _REINDEX_LAUNCH | {"indexe", "indexez", "indexer", "reconstruis", "reconstruire", "actualise",
+                                    "actualiser", "rafraichis", "rafraichir"}
+_REINDEX_INDEX_WORDS = {"index", "indexation", "reindexation"}
+_REINDEX_OBJECT_WORDS = _REINDEX_INDEX_WORDS | {
+    "document", "documents", "documentaire", "documentaires", "fichier", "fichiers", "base", "donnees",
+    "kensaku"}
+_REINDEX_VOCAB = _REINDEX_OBJECT_WORDS | {
+    "l", "le", "la", "les", "un", "une", "mon", "mes", "ma", "ton", "tes", "notre", "nos", "tout", "toute",
+    "tous", "de", "du", "des", "complet", "complete", "nouvelle", "nouveau", "s", "il", "te", "plait",
+    "stp", "svp", "merci", "maintenant"}
+
+
+def is_explicit_reindex_request(message: str) -> bool:
+    """Vrai seulement si le message est un ordre direct de réindexer (« Réindexe mes documents »,
+    « Lance une réindexation », « Actualise l'index », « Peux-tu réindexer mes documents ? »).
+
+    Refus par défaut : questions, conditionnels (« si besoin »), négations, demandes mêlées à autre chose
+    et tout message dont les mots ne sont pas tous reconnus. Règle volontairement stricte : le message
+    entier doit se réduire à un ordre, ce qui exclut tout « si », « pas », « pour répondre », etc."""
+    if not isinstance(message, str):
+        return False
+    text = unicodedata.normalize("NFKD", message.lower())
+    text = "".join(c for c in text if not unicodedata.combining(c))
+    question = "?" in text
+    text = re.sub(r"\bre[\s-]+index", "reindex", text)
+    text = re.sub(r"\b(?:mets?|mettre)\s+a\s+jour\b", "actualise", text)
+    words = re.findall(r"[a-z0-9]+", text)
+    while words and words[0] in _REINDEX_FILLER:
+        words.pop(0)
+    polite = False
+    for phrase in _REINDEX_POLITE:
+        if tuple(words[:len(phrase)]) == phrase:
+            words, polite = words[len(phrase):], True
+            break
+    if (question and not polite) or not words:
+        return False
+    verb, rest = words[0], words[1:]
+    if not all(w in _REINDEX_VOCAB for w in rest):
+        return False
+    if verb in _REINDEX_DIRECT:
+        return True
+    if verb not in _REINDEX_VERBS:
+        return False
+    needed = _REINDEX_INDEX_WORDS if verb in _REINDEX_LAUNCH else _REINDEX_OBJECT_WORDS
+    return any(w in needed for w in rest)
 
 
 def _cli(argv: list[str]) -> int:

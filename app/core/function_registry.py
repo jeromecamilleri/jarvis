@@ -59,6 +59,10 @@ class FunctionSpec:
     document: str | None = None
     # Paramètres qui peuvent figurer dans le journal (jamais le contenu des résultats).
     log_args: tuple[str, ...] = ()
+    # Garde d'intention : reçoit le message ORIGINAL de l'utilisateur et doit retourner True pour
+    # autoriser l'exécution. Sans message (ou garde faux), la fonction est refusée avant son handler.
+    intent_guard: Callable[[str], bool] | None = None
+    intent_refusal: str = ""
 
     def __post_init__(self):
         if self.level not in LEVELS:
@@ -154,11 +158,12 @@ class FunctionRegistry:
             raise FunctionError(f"Le paramètre {p.name} doit être au plus {p.maximum:g}.")
         return value
 
-    def execute(self, name: str, arguments: Any, confirmed: bool = False) -> FunctionResult:
+    def execute(self, name: str, arguments: Any, confirmed: bool = False,
+                user_message: str | None = None) -> FunctionResult:
         """Exécute une fonction enregistrée. Ne lève jamais : les échecs deviennent `ok=False`.
         Journal INFO : nom, arguments autorisés (`log_args`), statut, durée ; jamais le résultat."""
         start = time.perf_counter()
-        result = self._execute(name, arguments, confirmed)
+        result = self._execute(name, arguments, confirmed, user_message)
         spec = self._functions.get(name)
         shown = {}
         if spec and isinstance(arguments, dict):
@@ -167,7 +172,8 @@ class FunctionRegistry:
                  "ok" if result.ok else "erreur", (time.perf_counter() - start) * 1000)
         return result
 
-    def _execute(self, name: str, arguments: Any, confirmed: bool) -> FunctionResult:
+    def _execute(self, name: str, arguments: Any, confirmed: bool,
+                 user_message: str | None = None) -> FunctionResult:
         spec = self._functions.get(name)
         if spec is None:
             return FunctionResult(False, error=f"Fonction inconnue : {name}.", name=name)
@@ -175,6 +181,16 @@ class FunctionRegistry:
             return FunctionResult(False, name=name, error=(
                 f"La fonction {name} (niveau « {spec.level} ») exige une confirmation explicite "
                 "de l'utilisateur ; elle n'a pas été exécutée."))
+        if spec.intent_guard is not None:
+            try:
+                allowed = bool(user_message) and spec.intent_guard(user_message) is True
+            except Exception:  # noqa: BLE001 - garde défaillant = refus
+                log.exception("Erreur dans le garde d'intention de %s", name)
+                allowed = False
+            if not allowed:
+                return FunctionResult(False, name=name, error=spec.intent_refusal or (
+                    f"La fonction {name} n'a pas été exécutée : la demande explicite de l'utilisateur "
+                    "n'est pas établie. Demande-lui de confirmer."))
         try:
             clean = self.validate(spec, arguments)
             return FunctionResult(True, spec.handler(**clean), name=name)

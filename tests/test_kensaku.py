@@ -109,7 +109,7 @@ def test_rerank_prefers_file_name_match_over_tests(fake):
     _, kensaku = fake("rank")
     out = kensaku.docs_search("function registry")["results"]
     assert out[0]["path"].endswith("app/core/function_registry.py") and out[0]["name_match"] == "file"
-    assert out[1]["path"].endswith("tests/test_functions.py") and out[1]["name_match"] == "path"
+    assert out[1]["path"].endswith("tests/test_functions.py") and out[1]["name_match"] is None  # « functions » ≠ « function »
     assert len(out) <= 5
 
 
@@ -119,6 +119,15 @@ def test_rerank_exact_file_name_wins_and_no_match_keeps_kensaku_order(fake):
     out = kensaku.docs_search("météo demain")["results"]
     assert [r["name_match"] for r in out] == [None] * 5
     assert out[0]["path"].endswith("tests/test_functions.py")  # ordre Kensaku conservé
+
+
+def test_rerank_matches_whole_words_only_and_tolerates_missing_snippet(fake):
+    _, kensaku = fake()
+    item = lambda name, snippet: {"path": f"{ROOT}/{name}", "score": 1.0, "match_type": "Content", "snippet": snippet}
+    out = kensaku._rerank("old", [item("folder.md", ""), item("old.md", None), {"path": f"{ROOT}/x/old/y.md",
+                                  "score": 1.0, "match_type": "Content"}])
+    by = {r["path"].rsplit("/", 1)[1]: r["name_match"] for r in out}
+    assert by == {"folder.md": None, "old.md": "file", "y.md": "path"}
 
 
 def test_rerank_does_not_boost_name_match_with_off_topic_content(fake):
@@ -409,6 +418,20 @@ def test_docs_index_state_returns_only_useful_fields(fake):
     assert set(out) == set(ks.STATE_FIELDS) and "secret_internal" not in out
 
 
+def test_docs_index_state_incomplete_state_is_an_error_not_a_partial_result(fake):
+    _, kensaku = fake("state_partial")
+    with pytest.raises(FunctionError, match="incomplet.*extract_total.*paused"):
+        kensaku.docs_index_state()
+
+
+@pytest.mark.parametrize("mode", ["indexing_str", "indexing_missing"])
+def test_docs_reindex_requires_a_boolean_is_indexing(fake, mode):
+    _, kensaku = fake(mode)
+    with pytest.raises(FunctionError, match="is_indexing"):
+        kensaku.docs_reindex()
+    assert "reindex" not in tools_called(fake)
+
+
 def test_docs_reindex_checks_state_then_starts(fake):
     _, kensaku = fake()
     assert kensaku.docs_reindex() == {"started": True, "already_running": False, "message": "Réindexation démarrée."}
@@ -465,5 +488,61 @@ def test_reindex_through_registry_runs_at_safe_write_level(fake):
     client, _ = fake()
     registry = FunctionRegistry()
     ks.register(registry, Settings(kensaku_enabled=True), client)
-    assert registry.execute("docs_reindex", {}).data["started"] is True
+    assert registry.execute("docs_reindex", {}, user_message="Réindexe mes documents").data["started"] is True
     assert registry.execute("docs_index_state", {}).data["files"] == 3
+
+
+REINDEX_YES = ["Réindexe mes documents", "Réindexe.", "réindexe l'index", "Re-indexe mes fichiers", "Lance une réindexation",
+               "Lance la réindexation de mes documents", "Relance l'indexation", "Actualise l'index",
+               "Mets à jour l'index", "Rafraîchis l'index Kensaku", "Reconstruis l'index",
+               "Peux-tu réindexer mes documents ?", "Jarvis, réindexe mes documents s'il te plaît",
+               "Oui, réindexe", "Réindexez tout"]
+REINDEX_NO = ["Peux-tu réindexer si besoin pour répondre à ma question sur le README ?",
+              "Réindexe si besoin pour répondre à ma question", "Réindexe si nécessaire", "Réindexe éventuellement",
+              "Dois-je réindexer ?", "Faut-il réindexer mes documents ?", "Pourquoi réindexer ?",
+              "Réindexer mes documents ?", "Ne réindexe pas mes documents", "Réindexe pas", "Sans réindexer",
+              "Où en est la réindexation ?", "La réindexation est-elle terminée ?", "Quel est l'état de l'index ?",
+              "Lis le README", "Réindexe mes documents puis lis le README", "Réindexe mes documents pour répondre",
+              "Oui", "", "   ", "Lance une application", "Mets à jour le système", "Actualise la page",
+              "Je voudrais savoir comment réindexer", "Tu devrais réindexer"]
+
+
+@pytest.mark.parametrize("message", REINDEX_YES)
+def test_reindex_intent_accepts_direct_requests(message):
+    assert ks.is_explicit_reindex_request(message) is True
+
+
+@pytest.mark.parametrize("message", REINDEX_NO)
+def test_reindex_intent_refuses_questions_conditionals_and_ambiguity(message):
+    assert ks.is_explicit_reindex_request(message) is False
+
+
+@pytest.mark.parametrize("message", [None, "", "Réindexe si besoin", "Dois-je réindexer ?"])
+def test_registry_refuses_reindex_without_explicit_intent_and_never_calls_mcp(fake, message):
+    client, _ = fake()
+    registry = FunctionRegistry()
+    ks.register(registry, Settings(kensaku_enabled=True), client)
+    result = registry.execute("docs_reindex", {}, user_message=message)
+    assert result.ok is False and "NON exécutée" in result.error
+    assert tools_called(fake) == []
+
+
+def test_other_functions_do_not_need_a_user_message(fake):
+    client, _ = fake()
+    registry = FunctionRegistry()
+    ks.register(registry, Settings(kensaku_enabled=True), client)
+    assert registry.execute("docs_index_state", {}).ok
+    assert registry.execute("docs_search", {"query": "function registry"}).ok
+
+
+def test_conditional_request_from_llm_is_refused_end_to_end(fake, db_path):
+    reply, _, _, _ = ask(fake, db_path, [
+        tool_call("docs_reindex"), final("Veux-tu que je réindexe ?")],
+        "Peux-tu réindexer si besoin pour répondre à ma question sur le README ?")
+    assert reply == "Veux-tu que je réindexe ?"
+    assert "reindex" not in tools_called(fake) and "index_state" not in tools_called(fake)
+
+
+def test_direct_request_from_llm_runs_reindex_end_to_end(fake, db_path):
+    ask(fake, db_path, [tool_call("docs_reindex"), final("Démarrée.")], "Réindexe mes documents")
+    assert "reindex" in tools_called(fake)

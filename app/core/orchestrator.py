@@ -88,8 +88,16 @@ class _DocState:
             return False
         if not self.filenames:
             return True
-        names = {os.path.basename(p).lower() for p in self.read_paths}
-        return any(f in names for f in (os.path.basename(n) for n in self.filenames))
+        read = [p.lower() for p in self.read_paths]
+        names = {os.path.basename(p) for p in read}
+        for wanted in self.filenames:
+            wanted = wanted[2:] if wanted.startswith("./") else wanted
+            if "/" in wanted:  # chemin fourni : comparer le chemin, pas seulement le nom
+                if any(p == wanted or p.endswith("/" + wanted) for p in read):
+                    return True
+            elif wanted in names:
+                return True
+        return False
 
 
 class Orchestrator:
@@ -158,7 +166,7 @@ class Orchestrator:
             messages.append(reply.message or {"role": "assistant", "content": reply.content})
             for i, call in enumerate(reply.tool_calls):
                 if i < MAX_CALLS_PER_ROUND:
-                    result = self.functions.execute(call.name, call.arguments)
+                    result = self.functions.execute(call.name, call.arguments, user_message=message)
                     docs.record(self.functions.get(call.name), result)
                     content = result.to_json()
                 else:
@@ -245,10 +253,11 @@ class Orchestrator:
                 f"conversation {c} ({d})" for c, d in self._source_labels(sources))
         # Échanges documentaires : conservés dans l'historique mais jamais en mémoire épisodique
         # (kind « document » exclu aussi du rattrapage au démarrage).
-        kind = "document" if docs.used else "chat"
+        documentary = docs.used or docs.requested
+        kind = "document" if documentary else "chat"
         user_id = self.conversations.add_message(conversation_id, "user", message, kind)
         assistant_id = self.conversations.add_message(conversation_id, "assistant", reply, kind)
-        if self.episodic is not None and not docs.used:
+        if self.episodic is not None and not documentary:
             self.episodic.index_exchange(conversation_id, user_id, assistant_id,
                                          message, llm_reply)
         return conversation_id, reply

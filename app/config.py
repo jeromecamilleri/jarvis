@@ -9,6 +9,10 @@ class Settings:
     num_ctx: int = int(os.getenv("JARVIS_NUM_CTX", "8192"))
     timeout: float = float(os.getenv("JARVIS_TIMEOUT", "120"))
     db_path: str = os.getenv("JARVIS_DB_PATH", "data/jarvis.db")
+    embed_model: str = os.getenv("JARVIS_EMBED_MODEL", "bge-m3")
+    episodic_k: int = 5
+    reply_reserve: int = 1024  # tokens gardés pour la réponse du modèle
+    memory_budget: int = 1500  # tokens max de souvenirs épisodiques injectés
     history_limit: int = 20
 
 

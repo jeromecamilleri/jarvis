@@ -79,3 +79,9 @@ def parse_command(message: str) -> Command | None:
 def is_personal_statement(message: str) -> bool:
     """Phrase du type « Mon employeur est X » donnée sans commande explicite."""
     return _parse_fact(message.strip()) is not None
+
+
+NOT_STORED_NOTICE = (
+    "\n\n(Rien n'a été enregistré dans ta mémoire personnelle. "
+    "Pour l'enregistrer, écris « Retiens que… ».)"
+)

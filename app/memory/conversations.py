@@ -19,12 +19,22 @@ class ConversationStore:
         return row is not None
 
     def add_message(self, conversation_id: int, role: str, content: str,
-                    kind: str = "chat") -> None:
-        self.conn.execute(
+                    kind: str = "chat") -> int:
+        cur = self.conn.execute(
             "INSERT INTO messages (conversation_id, role, content, kind) VALUES (?, ?, ?, ?)",
             (conversation_id, role, content, kind),
         )
         self.conn.commit()
+        return cur.lastrowid
+
+    def chat_message_ids(self, conversation_id: int, limit: int | None = None) -> list[int]:
+        """Identifiants des messages conversationnels (même fenêtre que celle envoyée au LLM)."""
+        rows = self.conn.execute(
+            "SELECT id FROM messages WHERE conversation_id = ? AND kind != 'command' ORDER BY id",
+            (conversation_id,),
+        ).fetchall()
+        ids = [r["id"] for r in rows]
+        return ids[-limit:] if limit else ids
 
     def messages(self, conversation_id: int, limit: int | None = None,
                  include_commands: bool = True) -> list[dict]:

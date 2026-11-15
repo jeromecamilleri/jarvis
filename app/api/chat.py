@@ -71,3 +71,8 @@ def delete_profile(key: str, state=Depends(_state)):
     if not (state.profile.delete(normalize_key(key)) or state.profile.delete(key)):
         raise HTTPException(status_code=404, detail="Clé introuvable")
     return state.profile.all()
+
+
+@router.get("/memory/search")
+def search_memory(q: str, k: int = 5, state=Depends(_state)):
+    return state.episodic.search(q, k)

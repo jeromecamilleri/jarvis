@@ -229,14 +229,25 @@ sérialisés par un verrou), et le ferme à l'arrêt. Processus mort : une seule
 d'indisponibilité. Kensaku absent ou en panne : Jarvis démarre et fonctionne normalement.
 Aucune dépendance Python ajoutée (client minimal `subprocess`, pas de SDK `mcp`).
 
-Fonctions (niveau `read`, enregistrées dans le registre) :
+Fonctions (enregistrées dans le registre ; `docs_search`, `docs_read` et `docs_index_state` en `read`, `docs_reindex` en `safe_write`) :
 - `docs_search(query, max_results)` → 3 à 5 résultats (Jarvis demande 10 à Kensaku puis reclasse) : chemin, score,
   type de correspondance, `name_match` (`file`/`path` si le nom ou le chemin correspond à la requête, sauf contenu
   manifestement hors sujet), extrait (≤ 200 car.).
 - `docs_read(path, query, max_tokens ≤ 512)` → passage d'un fichier. Le chemin doit venir d'un `docs_search`
   précédent, être absolu, sans `..`, sous une racine indexée (`index_state`) ; Kensaku refuse en plus tout
   fichier hors index (ex. `token.json` de Google).
-Seuls `search`, `read_snippet` et `index_state` sont appelés : jamais `reindex`, `regex_search`, `find_symbol`.
+- `docs_index_state()` → état de l'index (`phase`, `is_indexing`, `files`, `files_indexed`, `content_docs`,
+  `content_indexed`, `extract_done`, `extract_total`, `semantic_units`, `index_bytes`, `as_of`, `paused`).
+  Sert à répondre à « où en est la réindexation ? » ou « combien de fichiers sont indexés ? ».
+- `docs_reindex()` → démarre une réindexation, **uniquement sur demande explicite** de l'utilisateur ; jamais
+  déclenchée par une recherche, ni au démarrage de Jarvis. Elle vérifie `is_indexing` juste avant : si une
+  indexation est déjà active, rien n'est lancé (`already_running`). Le retour est immédiat (`started: true`) mais
+  l'indexation est **asynchrone** (gérée par Kensaku, sans attente ni polling dans Jarvis) : pour savoir si elle est
+  terminée, demander l'état via `docs_index_state`.
+Prérequis : l'indexation est assurée par le **daemon Kensaku** (`~/.local/bin/kensaku-daemon`, socket
+`$XDG_RUNTIME_DIR/kensaku.sock`, verrou d'écriture Tantivy), lancé par l'application graphique Kensaku. Jarvis ne
+parle qu'à `kensaku-cli mcp` : il ne lance jamais le daemon ni l'interface, ne touche ni au socket ni aux verrous.
+Outils MCP appelés : `search`, `read_snippet`, `index_state`, `reindex` (jamais `regex_search`, `find_symbol`).
 Le LLM décide seul quand chercher (pas de déclencheur). Les résultats sont des données non fiables.
 `docs_read` ajoute `query_found` : simple correspondance **littérale** du texte `query` dans le passage, pas une
 mesure de pertinence. Sans occurrence, le passage est le début du fichier.
@@ -257,8 +268,8 @@ Configuration (`.env.example`) : `JARVIS_KENSAKU=1` (0 pour désactiver), `JARVI
 `JARVIS_KENSAKU_TIMEOUT=15` (secondes par appel).
 
 **L'index peut être obsolète** : le watcher de Kensaku ne tourne que si l'application Kensaku est ouverte.
-Jarvis ne réindexe pas et ne lance pas l'interface ; pour actualiser, ouvrir Kensaku et attendre la fin de
-l'indexation.
+Jarvis ne réindexe jamais automatiquement et ne lance pas l'interface ; pour actualiser, demander explicitement
+« réindexe les documents » (`docs_reindex`) puis suivre l'avancement avec `docs_index_state`, ou ouvrir Kensaku.
 
 Test manuel réel : `python -m app.functions.kensaku check "architecture générale de Jarvis"`
 (ouvre une session, cherche, lit le premier passage, ferme le processus). Les tests (`tests/test_kensaku.py`)

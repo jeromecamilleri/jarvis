@@ -4,8 +4,9 @@ Jarvis lance lui-même le processus (pas de service systemd, pas de port réseau
 persistante et la ferme à l'arrêt. Protocole : JSON-RPC 2.0, un message JSON par ligne ;
 poignée de main `initialize` puis `notifications/initialized`.
 
-Seuls `search`, `read_snippet` (et `index_state` en interne, pour connaître les racines indexées) sont
-appelés. Jamais de réindexation. L'index peut être périmé si l'application Kensaku est fermée.
+Outils appelés : `search`, `read_snippet`, `index_state` et `reindex`. La réindexation n'a lieu que sur demande
+explicite (`docs_reindex`), jamais automatiquement ; elle est asynchrone (suivi via `docs_index_state`).
+L'index peut être périmé si l'application Kensaku est fermée.
 
 Vérification manuelle :  python -m app.functions.kensaku check "architecture générale de Jarvis"
 """
@@ -16,8 +17,9 @@ import queue
 import subprocess
 import sys
 import threading
+import unicodedata
 
-from app.core.function_registry import READ, FunctionError, FunctionRegistry, FunctionSpec, Param
+from app.core.function_registry import READ, SAFE_WRITE, FunctionError, FunctionRegistry, FunctionSpec, Param
 
 log = logging.getLogger("jarvis.kensaku")
 
@@ -30,6 +32,8 @@ WEAK_SCORE = 0.25  # un nom de fichier ne remonte pas un résultat dont le score
 MAX_SNIPPET_CHARS = 200
 MAX_READ_TOKENS, MIN_READ_TOKENS = 512, 32
 MAX_KNOWN_PATHS = 500
+STATE_FIELDS = ("phase", "is_indexing", "files", "files_indexed", "content_docs", "content_indexed",
+                "extract_done", "extract_total", "semantic_units", "index_bytes", "as_of", "paused")
 UNAVAILABLE = "La recherche documentaire (Kensaku) est indisponible"
 
 
@@ -172,7 +176,7 @@ class KensakuClient:
 
 
 def _normalize(text: str) -> str:
-    text = text.lower()
+    text = "".join(c for c in unicodedata.normalize("NFD", text.lower()) if not unicodedata.combining(c))
     for ch in "_-./\\":
         text = text.replace(ch, " ")
     return " ".join(text.split())
@@ -232,8 +236,10 @@ class Kensaku:
                 tier = "path"
             else:
                 tier = None
-            if tier and not exact and r["score"] < WEAK_SCORE * best and not r["snippet"]:
-                tier = None  # nom correspondant mais contenu manifestement hors sujet
+            snippet = _normalize(r["snippet"]).split()
+            on_topic = not r["snippet"] or any(w in snippet or w in " ".join(snippet) for w in words)
+            if tier and not exact and r["score"] < WEAK_SCORE * best and not (r["snippet"] and on_topic):
+                tier = None  # nom correspondant mais score très faible et extrait absent ou sans rapport
             r["name_match"] = tier
         order = {"file": 0, "path": 1, None: 2}
         return sorted(results, key=lambda r: order[r["name_match"]])
@@ -266,6 +272,25 @@ class Kensaku:
                            "Le texte de `query` est ABSENT de ce passage (début du fichier) : n'en tire aucune "
                            "conclusion sur ce point ; relis avec une autre `query` (mot exact du fichier).")
         return out
+
+    def docs_index_state(self) -> dict:
+        state = self.client.call_tool("index_state", {})
+        if not isinstance(state, dict):
+            raise FunctionError(f"{UNAVAILABLE} : état de l'index mal formé.")
+        return {k: state[k] for k in STATE_FIELDS if k in state}
+
+    def docs_reindex(self) -> dict:
+        """Démarre la réindexation Kensaku (asynchrone, retour immédiat) sauf si elle est déjà en cours."""
+        with self.client._lock:  # vérification et déclenchement sans intercalation d'un autre appel
+            state = self.client.call_tool("index_state", {})
+            if not isinstance(state, dict) or "is_indexing" not in state:
+                raise FunctionError(f"{UNAVAILABLE} : état de l'index mal formé.")
+            if state["is_indexing"]:
+                return {"started": False, "already_running": True, "message": "Une réindexation est déjà en cours."}
+            data = self.client.call_tool("reindex", {})
+        if not isinstance(data, dict) or data.get("started") is not True:
+            raise FunctionError("Kensaku n'a pas démarré la réindexation.")
+        return {"started": True, "already_running": False, "message": "Réindexation démarrée."}
 
     # --- contrôles ---------------------------------------------------------------------
     def _remember(self, path: str) -> None:
@@ -320,6 +345,19 @@ def register(registry: FunctionRegistry, settings, client: KensakuClient | None 
                       required=False, minimum=MIN_READ_TOKENS, maximum=MAX_READ_TOKENS)),
         handler=kensaku.docs_read, level=READ, document="read",
         log_args=("path", "query", "max_tokens")))
+    registry.register(FunctionSpec(
+        name="docs_index_state",
+        description=("Consultation en lecture seule de l'état de l'index documentaire : phase, indexation en cours, "
+                     "nombre de fichiers indexés, progression. À utiliser pour suivre une réindexation ou vérifier "
+                     "si elle est terminée."),
+        params=(), handler=kensaku.docs_index_state, level=READ))
+    registry.register(FunctionSpec(
+        name="docs_reindex",
+        description=("Démarre la réindexation de l'index documentaire, UNIQUEMENT sur demande explicite de "
+                     "l'utilisateur. Ne jamais l'appeler pour une recherche documentaire normale. Elle est "
+                     "asynchrone : « started » signifie seulement qu'elle a démarré, ne dis jamais qu'elle est "
+                     "terminée ; pour le résultat, appelle docs_index_state."),
+        params=(), handler=kensaku.docs_reindex, level=SAFE_WRITE))
     return client
 
 

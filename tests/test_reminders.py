@@ -229,12 +229,13 @@ def test_restart_restores_future_reminders(db_path):
 
 
 def test_reminders_due_during_downtime_become_missed_and_are_not_fired(db_path):
-    app, *_ = build(db_path)
+    base = T0 + timedelta(days=3650)  # futur lointain : insensible à l'horloge réelle (APScheduler)
+    app, *_ = build(db_path, clock=Clock(base))
     client = TestClient(app)
     say(client, "Mets une alarme dans une minute.")
     say(client, "Rappelle-moi dans 3 heures de dîner.")
     notifier2 = Notifier()
-    app2, *_ = build(db_path, clock=Clock(T0 + timedelta(hours=1)), notifier=notifier2)
+    app2, *_ = build(db_path, clock=Clock(base + timedelta(hours=1)), notifier=notifier2)
     with TestClient(app2) as c2:
         store = app2.state.reminder_store
         assert store.get(1)["status"] == "missed" and store.get(2)["status"] == "pending"
@@ -243,7 +244,7 @@ def test_reminders_due_during_downtime_become_missed_and_are_not_fired(db_path):
         alerts = c2.get("/reminders/alerts").json()
         assert [(a["id"], a["status"]) for a in alerts] == [(1, "missed")]
     assert notifier2.spoken == []
-    app3, *_ = build(db_path, clock=Clock(T0 + timedelta(hours=1)))
+    app3, *_ = build(db_path, clock=Clock(base + timedelta(hours=1)))
     with TestClient(app3):  # un 2e redémarrage ne rejoue rien
         assert app3.state.reminder_store.get(1)["status"] == "missed"
 

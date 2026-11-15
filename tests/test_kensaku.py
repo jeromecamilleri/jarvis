@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 import app.functions.kensaku as ks
 from app.config import Settings
-from app.core.function_registry import READ, FunctionError, FunctionRegistry
+from app.core.function_registry import READ, SAFE_WRITE, FunctionError, FunctionRegistry
 from app.core.llm import ToolCall, ToolReply
 from app.main import create_app
 
@@ -129,6 +129,18 @@ def test_rerank_does_not_boost_name_match_with_off_topic_content(fake):
     assert not out[0]["path"].endswith("function_registry_old.md")
 
 
+def test_rerank_off_topic_snippet_does_not_unlock_boost_but_relevant_one_does_ignoring_accents(fake):
+    _, kensaku = fake("rank")
+    def item(name, score, snippet):
+        return {"path": f"{ROOT}/docs/{name}", "score": score, "match_type": "Content", "snippet": snippet}
+    out = kensaku._rerank("registry memoire", [
+        item("top.md", 1.0, ""), item("registry_cuisine.md", 0.05, "Une recette de cuisine"),
+        item("registry_memoire.md", 0.05, "La MÉMOIRE du registre")])
+    by = {r["path"].rsplit("/", 1)[1]: r["name_match"] for r in out}
+    assert by["registry_cuisine.md"] is None  # extrait sans rapport
+    assert by["registry_memoire.md"] == "file"  # « MÉMOIRE » ≡ « memoire »
+
+
 # --- docs_read et validation des chemins ------------------------------------------------
 def test_docs_read_after_search(fake):
     _, kensaku = fake()
@@ -215,16 +227,16 @@ def test_process_death_twice_gives_error_without_retry_loop(fake):
 # --- sécurité du module ---------------------------------------------------------------
 def test_only_read_tools_are_ever_called():
     source = inspect.getsource(ks)
-    assert '"reindex"' not in source and "regex_search" not in source and "find_symbol" not in source
+    assert "regex_search" not in source and "find_symbol" not in source
     assert "shell=True" not in source
 
 
-def test_register_exposes_only_two_read_functions_and_respects_disabled():
+def test_register_exposes_functions_with_right_levels_and_respects_disabled():
     registry = FunctionRegistry()
     assert ks.register(registry, Settings(kensaku_enabled=False)) is None and len(registry) == 0
     client = ks.register(registry, Settings(kensaku_enabled=True, kensaku_cli_path="~/x/kensaku-cli"))
-    assert [s.name for s in registry.specs()] == ["docs_search", "docs_read"]
-    assert all(s.level == READ for s in registry.specs())
+    assert {s.name: s.level for s in registry.specs()} == {
+        "docs_search": READ, "docs_read": READ, "docs_index_state": READ, "docs_reindex": SAFE_WRITE}
     assert client.command == [os.path.expanduser("~/x/kensaku-cli"), "mcp"] and "~" not in client.command[0]
 
 
@@ -327,11 +339,11 @@ def test_normal_turn_is_still_indexed(fake, db_path):
 
 
 def test_guard_warns_and_retries_once_when_llm_answers_without_tools(fake, db_path):
-    reply, llm, chunks, _ = ask(fake, db_path, [final("J'ai lu le fichier, il contient X."), final("Toujours de mémoire.")],
+    reply, llm, chunks, kinds = ask(fake, db_path, [final("J'ai lu le fichier, il contient X."), final("Toujours de mémoire.")],
                                 "Lis le fichier function registry et explique-le")
     assert reply.startswith("Toujours de mémoire.") and reply.endswith(ks_notice())
     assert any("docs_search" in m["content"] for m in llm.seen[1] if m["role"] == "system")
-    assert chunks >= 1  # aucun document consulté : tour ordinaire
+    assert chunks == 0 and kinds == {"document"}  # demande documentaire : jamais en mémoire épisodique
 
 
 def ks_notice():
@@ -374,3 +386,84 @@ def test_function_calls_are_logged_without_document_content(fake, db_path, caplo
     assert "fonction docs_search" in logs and "fonction docs_read" in logs
     assert "statut=ok" in logs and "durée=" in logs and "mémoire" in logs and "f0.md" in logs
     assert "passage de" not in logs and "extrait 0" not in logs
+
+
+def test_guard_compares_full_path_when_given_but_only_name_when_name_given(fake, db_path):
+    wrong = [tool_call("docs_search", query="x"), tool_call("docs_read", path=f"{ROOT}/f1.md"), final("Voici.")]
+    reply, *_ = ask(fake, db_path, wrong, "Lis le fichier other/f1.md")
+    assert reply.endswith(ks_notice())  # même nom, autre chemin
+    right = [tool_call("docs_search", query="x"), tool_call("docs_read", path=f"{ROOT}/f1.md"), final("Voici.")]
+    assert ask(fake, db_path, right, f"Lis le fichier {ROOT}/f1.md")[0] == "Voici."
+    assert ask(fake, db_path, right, "Lis le fichier f1.md")[0] == "Voici."
+
+
+# --- état de l'index et réindexation explicite ------------------------------------------
+def tools_called(fake):
+    return [c.split(" ", 1)[0] for c in calls(fake)]
+
+
+def test_docs_index_state_returns_only_useful_fields(fake):
+    _, kensaku = fake()
+    out = kensaku.docs_index_state()
+    assert out["phase"] == "idle" and out["is_indexing"] is False and out["files_indexed"] == 3
+    assert set(out) == set(ks.STATE_FIELDS) and "secret_internal" not in out
+
+
+def test_docs_reindex_checks_state_then_starts(fake):
+    _, kensaku = fake()
+    assert kensaku.docs_reindex() == {"started": True, "already_running": False, "message": "Réindexation démarrée."}
+    tools = tools_called(fake)
+    assert tools[-2:] == ["index_state", "reindex"]
+    assert json.loads(calls(fake)[-1].split(" ", 1)[1]) == {}
+
+
+def test_docs_reindex_does_nothing_when_already_indexing(fake):
+    _, kensaku = fake("indexing")
+    out = kensaku.docs_reindex()
+    assert out["started"] is False and out["already_running"] is True and "déjà en cours" in out["message"]
+    assert "reindex" not in tools_called(fake)
+
+
+@pytest.mark.parametrize("mode", ["reindex_refused", "reindex_bad"])
+def test_docs_reindex_not_started_or_malformed_is_an_error(fake, mode):
+    _, kensaku = fake(mode)
+    with pytest.raises(FunctionError, match="pas démarré"):
+        kensaku.docs_reindex()
+
+
+@pytest.mark.parametrize("mode", ["rpc_error", "is_error", "empty_text", "bad_json", "garbage"])
+def test_reindex_mcp_errors_become_function_errors(fake, mode):
+    _, kensaku = fake(mode)
+    kensaku.client.roots = [ROOT]
+    with pytest.raises(FunctionError):
+        kensaku.docs_reindex()
+
+
+def test_index_state_mcp_error_becomes_function_error(fake):
+    client, kensaku = fake("state_error")
+    client.start()
+    for call in (kensaku.docs_index_state, kensaku.docs_reindex):
+        with pytest.raises(FunctionError, match="refusé"):
+            call()
+    assert "reindex" not in tools_called(fake)
+
+
+def test_search_and_read_never_trigger_reindex(fake):
+    _, kensaku = fake()
+    path = kensaku.docs_search("x")["results"][0]["path"]
+    kensaku.docs_read(path, "mot")
+    assert "reindex" not in tools_called(fake)
+
+
+def test_reindex_is_not_called_at_startup(fake):
+    client, _ = fake()
+    client.start()
+    assert "reindex" not in tools_called(fake)
+
+
+def test_reindex_through_registry_runs_at_safe_write_level(fake):
+    client, _ = fake()
+    registry = FunctionRegistry()
+    ks.register(registry, Settings(kensaku_enabled=True), client)
+    assert registry.execute("docs_reindex", {}).data["started"] is True
+    assert registry.execute("docs_index_state", {}).data["files"] == 3

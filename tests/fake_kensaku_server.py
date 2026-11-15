@@ -16,6 +16,10 @@ Comportement choisi par la variable d'environnement FAKE_MODE :
   big_snippet   read_snippet renvoie un texte énorme
   rank          résultats nommés : tests/test_functions.py, app/core/function_registry.py, docs/notes.md, ...
   empty_read    read_snippet renvoie un texte vide
+  indexing      index_state renvoie is_indexing=true
+  reindex_refused  reindex répond started=false
+  reindex_bad   reindex répond un JSON sans `started`
+  state_error   index_state échoue (erreur JSON-RPC) après la poignée de main
   noisy         émet des notifications et une réponse tardive avant la bonne réponse
 Le serveur écrit les outils appelés dans FAKE_LOG (un nom par ligne) s'il est défini.
 """
@@ -27,6 +31,7 @@ MODE = os.environ.get("FAKE_MODE", "ok")
 LOG = os.environ.get("FAKE_LOG")
 MARK = os.environ.get("FAKE_MARK")
 ROOT = "/data/docs"
+STATES = [0]
 
 
 def reply(i, result=None, error=None):
@@ -54,7 +59,14 @@ for line in sys.stdin:
         if LOG:
             open(LOG, "a").write(f"{name} {json.dumps(args)}\n")
         if name == "index_state":
-            reply(i, text({"roots": [ROOT], "files": 3}))
+            STATES[0] += 1
+            if MODE == "state_error" and STATES[0] > 1:
+                reply(i, error={"code": -32000, "message": "state unavailable"})
+                continue
+            reply(i, text({"roots": [ROOT], "phase": "idle", "is_indexing": MODE == "indexing", "files": 3,
+                           "files_indexed": 3, "content_docs": 3, "content_indexed": 2, "extract_done": 1,
+                           "extract_total": 3, "semantic_units": 9, "index_bytes": 1234, "as_of": "2026-11-15T22:00:00",
+                           "paused": False, "secret_internal": "x"}))
             continue
         if MODE == "die_always" or (MODE == "die_once" and MARK and not os.path.exists(MARK)):
             if MARK:
@@ -90,6 +102,9 @@ for line in sys.stdin:
                 print(json.dumps({"jsonrpc": "2.0", "method": "notifications/message", "params": {}}), flush=True)
                 reply(i - 50, text({"results": []}))  # réponse tardive d'un échange ancien
             reply(i, text({"results": results, "has_more": n > 5}))
+        elif name == "reindex":
+            reply(i, text({"started": False} if MODE == "reindex_refused" else
+                           {"ok": True} if MODE == "reindex_bad" else {"started": True}))
         elif name == "read_snippet":
             body = ("y" * 20000) if MODE == "big_snippet" else "" if MODE == "empty_read" else f"passage de {args['path']}"
             reply(i, text({"path": args["path"], "line_start": 3, "line_end": 4, "text": body, "truncated": False}))

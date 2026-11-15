@@ -88,3 +88,23 @@ Pistes (non implémentées, à valider avant) :
 - Étendre le déclencheur du garde-fou aux formulations au pluriel / sans nom de fichier (« Lis les fichiers concernés… »).
 - Faire corriger le faux positif `claims_memory_write` sur les réponses documentaires (test 3).
 - Lecture documentaire multi-passages (déjà au `BACKLOG.md`).
+
+# Garde d'intention de `docs_reindex` — essais réels (2026-11-15)
+
+Contexte : port 8002, base temporaire, vrai Kensaku (daemon géré par l'interface Kensaku), Qwen 3 8B.
+Avant le garde, « Peux-tu réindexer si besoin pour répondre à ma question sur le README ? » déclenchait une
+réindexation (conditionnel non respecté par Qwen). Garde ajouté : `FunctionSpec.intent_guard` +
+`is_explicit_reindex_request()` (message original, refus par défaut).
+
+| # | Message | Résultat | Journal |
+|---|---------|----------|---------|
+| 1 | « Réindexe si besoin pour répondre au README » | **Refus** : Qwen demande de confirmer (« Réindexe mes documents ») | `docs_reindex statut=erreur durée=0 ms` (aucun appel MCP `reindex`) |
+| 2 | « Réindexe mes documents » | **Déclenchée** : « La réindexation de tes documents a démarré. » | `docs_reindex statut=ok durée=298 ms` |
+| 3 | « Quel est l'état de l'index ? » | **Consultation seule** : phase idle, pas d'indexation en cours | `docs_index_state statut=ok` |
+
+Remarques :
+- Dans le test 1, Qwen a aussi appelé `docs_index_state` (lecture seule, sans effet) avant l'appel refusé.
+- « 60 fichiers indexés sur 49 » (test 3) vient des données de Kensaku, restituées telles quelles par Jarvis.
+- Limite assumée : un « Oui » seul, après une demande de confirmation, est refusé ; il faut répéter l'ordre
+  (« Réindexe mes documents »).
+- Suite complète au moment de l'essai : 353 passés, 1 xfailed.

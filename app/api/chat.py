@@ -1,10 +1,14 @@
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.core.commands import normalize_key
 from app.core.llm import LLMError
 
 router = APIRouter()
+ASK_PATH = Path(__file__).resolve().parent.parent / "static" / "ask.html"
 
 
 class ChatRequest(BaseModel):
@@ -24,6 +28,11 @@ class FactRequest(BaseModel):
 
 def _state(request: Request):
     return request.app.state
+
+
+@router.get("/ask", include_in_schema=False)
+def ask_page():
+    return FileResponse(ASK_PATH)
 
 
 @router.post("/chat", response_model=ChatResponse)

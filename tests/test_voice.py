@@ -125,6 +125,12 @@ def test_ui_is_served(make_client):
     assert r.status_code == 200 and "Jarvis" in r.text
 
 
+def test_ask_page_is_served(make_client):
+    client, _ = make_client()
+    r = client.get("/ask")
+    assert r.status_code == 200 and "/chat" in r.text and "Send" in r.text
+
+
 def test_voice_chat_goes_through_orchestrator_and_memory(make_client):
     stt = FakeSTT("Retiens que mon employeur est Atos")
     client, llm = make_client(stt=stt, tts=FakeTTS())

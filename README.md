@@ -104,7 +104,7 @@ puis réindexé par `backfill()` (données dérivées uniquement).
 Aussi : les mots génériques (« projet ») restent ambigus ; les résumés de conversation sont prévus plus tard.
 
 ## Voix (push-to-talk)
-Ouvrir **http://localhost:8000/ui** (Chrome/Firefox, micro autorisé). Tout est local.
+Ouvrir **http://localhost:8000/ui** (Chrome/Firefox, micro autorisé). Tout est local. Une page texte minimale (champ + bouton Send, qui appelle `POST /chat`) est disponible sur **http://localhost:8000/ask**.
 - Bouton : un clic démarre, un clic arrête ; ou maintenir enfoncé (> 0,5 s) et relâcher.
 - `POST /voice/chat` (audio) : ffmpeg → faster-whisper (`small`, CPU, int8, français) → **le même orchestrateur
   que `/chat`** (profil, commandes « Retiens que… », mémoire épisodique inchangés) → texte.

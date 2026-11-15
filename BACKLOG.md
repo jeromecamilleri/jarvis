@@ -50,5 +50,5 @@ Améliorations non indispensables, à traiter plus tard.
 - Réflexion sur l'actualisation automatique de l'index Kensaku (watcher fermé avec l'interface, index périmé).
 
 ## Idées générales
-- Interface texte en complément de la voix.
+- Interface texte en complément de la voix (page minimale `/ask` faite ; reste : historique, rendu Markdown).
 - Amélioration du vocabulaire technique de Whisper (termes techniques, noms de fichiers et de code).

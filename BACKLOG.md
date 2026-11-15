@@ -37,3 +37,12 @@ Améliorations non indispensables, à traiter plus tard.
 - Détection d'intention agenda déterministe (sans dépendre du choix d'outil par Qwen).
 - Ne pas indexer en mémoire épisodique les réponses issues d'outils.
 - Streaming des réponses avec outils.
+
+## Kensaku (recherche documentaire)
+- Pagination (`cursor`) et filtres `path` / `ext` / `modified_after` pour `docs_search`.
+- Exposer `regex_search` / `find_symbol` si le besoin se confirme.
+- Signaler à l'utilisateur un index périmé (`index_state`, `last_reconcile`) ; actualisation périodique de l'index.
+- Indexer d'autres répertoires (docs personnelles) avec un périmètre explicite.
+- Vérifier qu'un passage lu répond réellement à la question (pertinence, lecture de plusieurs passages / pagination) ; le garde-fou ne vérifie que la lecture technique.
+- Détecter le « mauvais fichier » sans nom explicite dans le message.
+- Relance du processus avec délai (backoff) si Kensaku tombe souvent.

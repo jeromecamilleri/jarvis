@@ -217,12 +217,14 @@ def test_audio_failure_keeps_reminder_fired_visible_and_never_repeats(db_path):
 
 # --- redémarrage -----------------------------------------------------------------------
 def test_restart_restores_future_reminders(db_path):
-    app, clock, notifier, _ = build(db_path)
+    # Horloge lointaine : APScheduler utilise l'heure réelle et ne doit pas rattraper l'échéance.
+    base = T0 + timedelta(days=3650)
+    app, *_ = build(db_path, clock=Clock(base))
     say(TestClient(app), "Rappelle-moi dans une heure de sortir le linge.")
-    app2, *_ = build(db_path, clock=Clock(T0 + timedelta(minutes=10)))
+    app2, *_ = build(db_path, clock=Clock(base + timedelta(minutes=10)))
     with TestClient(app2):
         job = app2.state.reminders.scheduler.get_job("reminder-1")
-        assert job is not None and job.next_run_time.astimezone(timezone.utc) == T0 + timedelta(hours=1)
+        assert job is not None and job.next_run_time.astimezone(timezone.utc) == base + timedelta(hours=1)
         assert app2.state.reminder_store.get(1)["status"] == "pending"
 
 

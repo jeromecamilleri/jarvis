@@ -20,6 +20,9 @@ class Settings:
     timezone: str = os.getenv("JARVIS_TIMEZONE", "Europe/Paris")
     google_credentials_path: str = os.getenv("JARVIS_GOOGLE_CREDENTIALS", "data/google_calendar/credentials.json")
     google_token_path: str = os.getenv("JARVIS_GOOGLE_TOKEN", "data/google_calendar/token.json")
+    kensaku_enabled: bool = os.getenv("JARVIS_KENSAKU", "1").lower() not in ("0", "false", "no", "")
+    kensaku_cli_path: str = os.getenv("JARVIS_KENSAKU_CLI", "~/.local/bin/kensaku-cli")
+    kensaku_timeout: float = float(os.getenv("JARVIS_KENSAKU_TIMEOUT", "15"))
     max_tool_rounds: int = int(os.getenv("JARVIS_MAX_TOOL_ROUNDS", "3"))
     episodic_k: int = 5
     reply_reserve: int = 1024  # tokens gardés pour la réponse du modèle

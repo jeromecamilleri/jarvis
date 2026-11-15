@@ -117,10 +117,10 @@ class EpisodicMemory:
         return pieces
 
     def backfill(self) -> int:
-        """Indexe les anciens échanges conversationnels pas encore indexés."""
+        """Indexe les anciens échanges conversationnels pas encore indexés (hors commandes et échanges documentaires)."""
         rows = self.conn.execute(
             "SELECT id, conversation_id, role, content FROM messages "
-            "WHERE kind != 'command' ORDER BY conversation_id, id").fetchall()
+            "WHERE kind NOT IN ('command', 'document') ORDER BY conversation_id, id").fetchall()
         count = "SELECT COUNT(DISTINCT first_message_id) FROM chunks"
         before = self.conn.execute(count).fetchone()[0]
         for cur, nxt in zip(rows, rows[1:]):

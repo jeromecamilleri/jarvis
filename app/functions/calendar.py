@@ -183,7 +183,8 @@ def register(registry: FunctionRegistry, settings, service_factory=None) -> Goog
             Param("max_results", "integer", f"Nombre maximal d'événements (défaut {DEFAULT_RESULTS}).",
                   required=False, minimum=1, maximum=MAX_RESULTS),
         ),
-        handler=calendar.list_events, level=READ, trigger=TRIGGER))
+        handler=calendar.list_events, level=READ, trigger=TRIGGER,
+        log_args=("start", "end", "max_results")))
     return calendar
 
 

@@ -14,6 +14,7 @@ au démarrage (`app/main.py`) ; il n'y a ni chargement dynamique ni découverte 
 """
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -53,10 +54,17 @@ class FunctionSpec:
     # Motif (regex, insensible à la casse) d'un message utilisateur qui exige cette fonction.
     # Sert uniquement de garde-fou si le LLM répond sans l'appeler.
     trigger: str | None = None
+    # Rôle documentaire : "search" (trouve des fichiers) ou "read" (lit un passage). Permet à
+    # l'orchestrateur de vérifier les réponses documentaires sans connaître les noms des fonctions.
+    document: str | None = None
+    # Paramètres qui peuvent figurer dans le journal (jamais le contenu des résultats).
+    log_args: tuple[str, ...] = ()
 
     def __post_init__(self):
         if self.level not in LEVELS:
             raise ValueError(f"niveau d'autorisation inconnu : {self.level}")
+        if self.document not in (None, "search", "read"):
+            raise ValueError(f"rôle documentaire inconnu : {self.document}")
 
     def to_ollama_tool(self) -> dict:
         properties = {}
@@ -147,7 +155,19 @@ class FunctionRegistry:
         return value
 
     def execute(self, name: str, arguments: Any, confirmed: bool = False) -> FunctionResult:
-        """Exécute une fonction enregistrée. Ne lève jamais : les échecs deviennent `ok=False`."""
+        """Exécute une fonction enregistrée. Ne lève jamais : les échecs deviennent `ok=False`.
+        Journal INFO : nom, arguments autorisés (`log_args`), statut, durée ; jamais le résultat."""
+        start = time.perf_counter()
+        result = self._execute(name, arguments, confirmed)
+        spec = self._functions.get(name)
+        shown = {}
+        if spec and isinstance(arguments, dict):
+            shown = {k: str(arguments[k])[:80] for k in spec.log_args if k in arguments}
+        log.info("fonction %s args=%s statut=%s durée=%d ms", name, json.dumps(shown, ensure_ascii=False),
+                 "ok" if result.ok else "erreur", (time.perf_counter() - start) * 1000)
+        return result
+
+    def _execute(self, name: str, arguments: Any, confirmed: bool) -> FunctionResult:
         spec = self._functions.get(name)
         if spec is None:
             return FunctionResult(False, error=f"Fonction inconnue : {name}.", name=name)

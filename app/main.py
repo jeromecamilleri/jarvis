@@ -1,4 +1,6 @@
 import os
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -13,6 +15,7 @@ from app.core.llm import OllamaClient
 from app.core.orchestrator import Orchestrator
 from app.core.reminders import AudioNotifier, ReminderService, utc_now
 from app.functions import calendar as google_calendar
+from app.functions import kensaku
 from app.memory.conversations import ConversationStore
 from app.memory.database import connect
 from app.memory.episodic import EpisodicMemory
@@ -29,12 +32,21 @@ def create_app(settings: Settings | None = None, llm=None, embedder=None, stt=No
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.reminders.start()
+        client = app.state.kensaku
+        if client is not None:  # Kensaku indisponible : Jarvis démarre quand même
+            try:
+                await asyncio.to_thread(client.start)
+            except Exception as e:  # noqa: BLE001
+                logging.getLogger("jarvis").warning("Kensaku non démarré : %s", e)
         try:
             yield
         finally:
+            if client is not None:
+                await asyncio.to_thread(client.close)
             app.state.reminders.shutdown()
 
     app = FastAPI(title="Jarvis", lifespan=lifespan)
+    app.state.kensaku = None
     parent = os.path.dirname(settings.db_path)
     if parent:
         os.makedirs(parent, exist_ok=True)
@@ -58,6 +70,7 @@ def create_app(settings: Settings | None = None, llm=None, embedder=None, stt=No
     if functions is None:  # fonctions enregistrées explicitement au démarrage
         functions = FunctionRegistry()
         google_calendar.register(functions, settings)
+        app.state.kensaku = kensaku.register(functions, settings)
     app.state.functions = functions
     app.state.orchestrator = Orchestrator(
         llm, app.state.conversations, app.state.profile, settings.history_limit,

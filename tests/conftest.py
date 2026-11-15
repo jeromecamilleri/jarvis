@@ -1,3 +1,7 @@
+import os
+
+os.environ.setdefault("JARVIS_KENSAKU", "0")  # les tests ne lancent jamais le vrai Kensaku
+
 import pytest
 from fastapi.testclient import TestClient
 

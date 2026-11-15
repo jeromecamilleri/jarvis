@@ -221,5 +221,48 @@ Limites : lecture seule, calendrier principal uniquement, 30 événements max, p
 encore se tromper de période ; la réponse finale (avec des infos d'agenda) est indexée dans la mémoire
 épisodique (cf. BACKLOG 7). Le flux OAuth réel n'est testé que par mocks.
 
+## Recherche documentaire (Kensaku, expérimental)
+Jarvis interroge l'index local de [Kensaku](https://kensaku.app) (fichiers du projet) via son serveur MCP
+`kensaku-cli mcp` (JSON-RPC 2.0 sur stdio, `protocolVersion 2024-11-05`). Aucun port, aucun service systemd :
+Jarvis lance le processus au démarrage (`lifespan`), garde **une session persistante** (échanges
+sérialisés par un verrou), et le ferme à l'arrêt. Processus mort : une seule relance par appel, puis message
+d'indisponibilité. Kensaku absent ou en panne : Jarvis démarre et fonctionne normalement.
+Aucune dépendance Python ajoutée (client minimal `subprocess`, pas de SDK `mcp`).
+
+Fonctions (niveau `read`, enregistrées dans le registre) :
+- `docs_search(query, max_results)` → 3 à 5 résultats (Jarvis demande 10 à Kensaku puis reclasse) : chemin, score,
+  type de correspondance, `name_match` (`file`/`path` si le nom ou le chemin correspond à la requête, sauf contenu
+  manifestement hors sujet), extrait (≤ 200 car.).
+- `docs_read(path, query, max_tokens ≤ 512)` → passage d'un fichier. Le chemin doit venir d'un `docs_search`
+  précédent, être absolu, sans `..`, sous une racine indexée (`index_state`) ; Kensaku refuse en plus tout
+  fichier hors index (ex. `token.json` de Google).
+Seuls `search`, `read_snippet` et `index_state` sont appelés : jamais `reindex`, `regex_search`, `find_symbol`.
+Le LLM décide seul quand chercher (pas de déclencheur). Les résultats sont des données non fiables.
+`docs_read` ajoute `query_found` : simple correspondance **littérale** du texte `query` dans le passage, pas une
+mesure de pertinence. Sans occurrence, le passage est le début du fichier.
+Les extraits ne sont jamais écrits en base. Les échanges qui ont appelé `docs_search`/`docs_read` restent dans
+l'historique (`kind = 'document'`) mais ne sont **jamais indexés en mémoire épisodique** (ni au rattrapage au démarrage).
+
+**Garde-fou « réponse documentaire »** : pour une demande explicite de lire/ouvrir/expliquer/résumer un fichier
+(verbe + nom de fichier avec extension ou « le fichier/document/module/code »), si le LLM répond sans outil, Jarvis le
+relance une fois. Si, au final, aucune lecture `docs_read` n'a réellement réussi (non appelée, erreur, texte vide, ou
+fichier lu différent du nom explicitement demandé), Jarvis ajoute « ⚠ Je n'ai pas pu vérifier le contenu du fichier
+demandé… ». Le contrôle porte sur l'exécution réelle, pas sur ce que dit le LLM.
+**Limite** : une lecture techniquement réussie ne garantit pas que le passage (≤ 512 tokens) contient la réponse ;
+une lecture partielle peut encore mener à une réponse erronée ou enjolivée. Le contrôle du « bon fichier » ne
+fonctionne que si le message contient un nom de fichier explicite.
+Journal : une ligne INFO par fonction (nom, arguments utiles tronqués, statut, durée) ; jamais le contenu lu.
+
+Configuration (`.env.example`) : `JARVIS_KENSAKU=1` (0 pour désactiver), `JARVIS_KENSAKU_CLI=~/.local/bin/kensaku-cli`,
+`JARVIS_KENSAKU_TIMEOUT=15` (secondes par appel).
+
+**L'index peut être obsolète** : le watcher de Kensaku ne tourne que si l'application Kensaku est ouverte.
+Jarvis ne réindexe pas et ne lance pas l'interface ; pour actualiser, ouvrir Kensaku et attendre la fin de
+l'indexation.
+
+Test manuel réel : `python -m app.functions.kensaku check "architecture générale de Jarvis"`
+(ouvre une session, cherche, lit le premier passage, ferme le processus). Les tests (`tests/test_kensaku.py`)
+utilisent un faux serveur MCP (`tests/fake_kensaku_server.py`), jamais l'index réel.
+
 ## Tests
     pytest

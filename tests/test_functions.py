@@ -11,6 +11,7 @@ from app.config import Settings
 from app.core.function_registry import (READ, SAFE_WRITE, SENSITIVE, FunctionError, FunctionRegistry,
                                         FunctionSpec, Param)
 from app.core.llm import LLMError, OllamaClient, ToolCall, ToolReply
+from app.core.model_adapter import TEXT, TEXT_AND_TOOLS, ModelResponse
 from app.main import create_app
 
 PARIS = ZoneInfo("Europe/Paris")
@@ -143,18 +144,19 @@ def test_plain_chat_is_unchanged_and_sends_no_tools(monkeypatch):
 
 # --- orchestrateur ---------------------------------------------------------------------
 class ToolLLM:
-    """LLM scripté : `script` = liste de ToolReply (chat_tools) ; chat() sert aux réponses finales."""
+    capabilities = TEXT_AND_TOOLS
+
+    """LLM scripté : `script` = liste de ModelResponse (requêtes avec outils) ; les requêtes sans outils reçoivent `final`."""
     def __init__(self, script, final="réponse finale"):
         self.script, self.final = list(script), final
         self.tool_calls_made, self.plain_calls = [], []
 
-    def chat_tools(self, messages, tools):
-        self.tool_calls_made.append((copy.deepcopy(messages), tools))
+    def generate(self, request):
+        if request.tools is None:
+            self.plain_calls.append(copy.deepcopy(request.messages))
+            return ModelResponse(self.final)
+        self.tool_calls_made.append((copy.deepcopy(request.messages), request.tools))
         return self.script.pop(0)
-
-    def chat(self, messages):
-        self.plain_calls.append(copy.deepcopy(messages))
-        return self.final
 
 
 def call(name="add", **args):
@@ -255,15 +257,17 @@ def test_memory_commands_and_reminders_never_reach_the_llm_or_functions(db_path)
     assert llm.tool_calls_made == [] and llm.plain_calls == []
 
 
-def test_llm_without_tool_support_keeps_text_behaviour(db_path):
+def test_without_registered_functions_keeps_text_behaviour(db_path):
     class TextOnly:
-        def chat(self, messages):
-            self.seen = messages
-            return "texte"
+        capabilities = frozenset({TEXT})
+
+        def generate(self, request):
+            self.request = request
+            return ModelResponse("texte")
     llm = TextOnly()
-    client, _ = build(db_path, llm)
+    client = TestClient(create_app(Settings(db_path=db_path, embed_model=""), llm=llm, functions=FunctionRegistry()))
     assert chat(client, "Bonjour") == "texte"
-    assert "Date et heure actuelles" not in llm.seen[0]["content"]
+    assert llm.request.tools is None and "Date et heure actuelles" not in llm.request.messages[0]["content"]
 
 
 def test_tools_fit_in_context_budget(db_path):

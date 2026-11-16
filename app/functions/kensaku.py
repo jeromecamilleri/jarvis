@@ -18,8 +18,10 @@ import re
 import subprocess
 import sys
 import threading
+import time
 import unicodedata
 
+from app.core import tracing
 from app.core.function_registry import READ, SAFE_WRITE, FunctionError, FunctionRegistry, FunctionSpec, Param
 
 log = logging.getLogger("jarvis.kensaku")
@@ -166,6 +168,18 @@ class KensakuClient:
             raise FunctionError(f"{UNAVAILABLE} : réponse mal formée.") from None
 
     def call_tool(self, name: str, arguments: dict):
+        """Appelle un outil MCP (tracé : nom de l'outil et durée, jamais ses arguments ni son résultat)."""
+        start = time.perf_counter()
+        try:
+            result = self._call_tool_retry(name, arguments)
+        except Exception as e:
+            tracing.emit("kensaku.call", "kensaku", "error", (time.perf_counter() - start) * 1000,
+                         tool=name, error=type(e).__name__, detail=tracing.safe_detail(e))
+            raise
+        tracing.emit("kensaku.call", "kensaku", duration_ms=(time.perf_counter() - start) * 1000, tool=name)
+        return result
+
+    def _call_tool_retry(self, name: str, arguments: dict):
         """Appelle un outil MCP. Processus mort : une seule tentative de redémarrage, puis erreur claire."""
         with self._lock:
             for attempt in (1, 2):

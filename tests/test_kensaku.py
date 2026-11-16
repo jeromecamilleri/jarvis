@@ -13,6 +13,7 @@ import app.functions.kensaku as ks
 from app.config import Settings
 from app.core.function_registry import READ, SAFE_WRITE, FunctionError, FunctionRegistry
 from app.core.llm import ToolCall, ToolReply
+from app.core.model_adapter import TEXT_AND_TOOLS, ModelResponse
 from app.main import create_app
 
 FAKE = str(Path(__file__).parent / "fake_kensaku_server.py")
@@ -251,15 +252,16 @@ def test_register_exposes_functions_with_right_levels_and_respects_disabled():
 
 # --- intégration Jarvis ----------------------------------------------------------------
 class ScriptedLLM:
+    capabilities = TEXT_AND_TOOLS
+
     def __init__(self, script):
         self.script, self.seen = list(script), []
 
-    def chat_tools(self, messages, tools):
-        self.seen.append(json.loads(json.dumps(messages)))
+    def generate(self, request):
+        if request.tools is None:
+            return ModelResponse("réponse forcée")
+        self.seen.append(json.loads(json.dumps(request.messages)))
         return self.script.pop(0)
-
-    def chat(self, messages):
-        return "réponse forcée"
 
 
 def tool_call(name, **args):

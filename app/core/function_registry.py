@@ -18,6 +18,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from app.core import tracing
+
 log = logging.getLogger("jarvis.functions")
 
 READ, SAFE_WRITE, SENSITIVE = "read", "safe_write", "sensitive"
@@ -163,39 +165,63 @@ class FunctionRegistry:
         """Exécute une fonction enregistrée. Ne lève jamais : les échecs deviennent `ok=False`.
         Journal INFO : nom, arguments autorisés (`log_args`), statut, durée ; jamais le résultat."""
         start = time.perf_counter()
-        result = self._execute(name, arguments, confirmed, user_message)
         spec = self._functions.get(name)
+        # Traces : nom et niveau ; seuls les paramètres numériques ou booléens de `log_args` (jamais de texte).
+        scalars = {k: arguments[k] for k in (spec.log_args if spec else ()) if isinstance(arguments, dict)
+                   and isinstance(arguments.get(k), (bool, int, float))}
+        tracing.emit("function.called", "functions", "started", name=str(name)[:64],
+                     level=spec.level if spec else None, args=scalars or None)
+        meta: dict = {}
+        result = self._execute(name, arguments, confirmed, user_message, meta)
+        duration = (time.perf_counter() - start) * 1000
+        if result.ok:
+            tracing.emit("function.completed", "functions", duration_ms=duration, name=str(name)[:64])
+        else:
+            tracing.emit("function.failed", "functions", "error", duration, name=str(name)[:64],
+                         kind=meta.get("kind", "function_error"), detail=tracing.safe_detail(result.error))
         shown = {}
         if spec and isinstance(arguments, dict):
             shown = {k: str(arguments[k])[:80] for k in spec.log_args if k in arguments}
         log.info("fonction %s args=%s statut=%s durée=%d ms", name, json.dumps(shown, ensure_ascii=False),
-                 "ok" if result.ok else "erreur", (time.perf_counter() - start) * 1000)
+                 "ok" if result.ok else "erreur", duration)
         return result
 
     def _execute(self, name: str, arguments: Any, confirmed: bool,
-                 user_message: str | None = None) -> FunctionResult:
+                 user_message: str | None = None, meta: dict | None = None) -> FunctionResult:
+        meta = {} if meta is None else meta
         spec = self._functions.get(name)
         if spec is None:
+            meta["kind"] = "unknown_function"
             return FunctionResult(False, error=f"Fonction inconnue : {name}.", name=name)
         if spec.level not in self.allowed_levels and not (spec.level == SENSITIVE and confirmed):
+            meta["kind"] = "confirmation_required"
             return FunctionResult(False, name=name, error=(
                 f"La fonction {name} (niveau « {spec.level} ») exige une confirmation explicite "
                 "de l'utilisateur ; elle n'a pas été exécutée."))
         if spec.intent_guard is not None:
+            cause = "guard_false"
             try:
                 allowed = bool(user_message) and spec.intent_guard(user_message) is True
+                if not user_message:
+                    cause = "no_user_message"
             except Exception:  # noqa: BLE001 - garde défaillant = refus
                 log.exception("Erreur dans le garde d'intention de %s", name)
-                allowed = False
-            if not allowed:
+                allowed, cause = False, "guard_error"
+            if allowed:
+                tracing.emit("intent_guard.accepted", "functions", name=name)
+            else:
+                tracing.emit("intent_guard.rejected", "functions", "rejected", name=name, cause=cause)
+                meta["kind"] = "intent_refused"
                 return FunctionResult(False, name=name, error=spec.intent_refusal or (
                     f"La fonction {name} n'a pas été exécutée : la demande explicite de l'utilisateur "
                     "n'est pas établie. Demande-lui de confirmer."))
         try:
             clean = self.validate(spec, arguments)
-            return FunctionResult(True, spec.handler(**clean), name=name)
+            with tracing.function_scope(name):
+                return FunctionResult(True, spec.handler(**clean), name=name)
         except FunctionError as e:
             return FunctionResult(False, error=str(e), name=name)
         except Exception:  # noqa: BLE001 - un bug de fonction ne doit pas faire échouer la conversation
             log.exception("Erreur inattendue dans la fonction %s", name)
+            meta["kind"] = "internal_error"
             return FunctionResult(False, error=f"Erreur interne dans la fonction {name}.", name=name)

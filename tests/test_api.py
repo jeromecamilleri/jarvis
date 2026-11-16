@@ -1,4 +1,5 @@
 from app.core.llm import LLMError
+from app.core.model_adapter import TEXT_AND_TOOLS
 
 
 def test_chat_answers(make_client):
@@ -10,7 +11,9 @@ def test_chat_answers(make_client):
 
 def test_ollama_error_gives_502(make_client):
     class Broken:
-        def chat(self, messages):
+        capabilities = TEXT_AND_TOOLS
+
+        def generate(self, request):
             raise LLMError("timeout")
     client, _ = make_client(Broken())
     assert client.post("/chat", json={"message": "x"}).status_code == 502

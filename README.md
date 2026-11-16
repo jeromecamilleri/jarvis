@@ -12,7 +12,7 @@ Machine cible : i7-8700K, 32 Go RAM, GTX 1070 8 Go.
 ## Installation
     python3 -m venv .venv && . .venv/bin/activate
     pip install -r requirements.txt
-    cp .env.example .env   # puis: set -a; . ./.env; set +a
+    cp .env.example .env   # chargé automatiquement au démarrage (voir « Fichier .env »)
     ollama pull qwen3:8b
     ollama pull bge-m3      # embeddings de la mémoire épisodique
     python -m piper.download_voices fr_FR-siwis-medium --download-dir data/models/piper   # voix (≈60 Mo)
@@ -279,6 +279,57 @@ Jarvis ne réindexe jamais automatiquement et ne lance pas l'interface ; pour ac
 Test manuel réel : `python -m app.functions.kensaku check "architecture générale de Jarvis"`
 (ouvre une session, cherche, lit le premier passage, ferme le processus). Les tests (`tests/test_kensaku.py`)
 utilisent un faux serveur MCP (`tests/fake_kensaku_server.py`), jamais l'index réel.
+
+## Modèle spécialisé expérimental : mini-llm (continuation de texte)
+
+Jarvis peut déléguer à `mini-llm` (projet indépendant, petit GPT de 17,8 M de paramètres entraîné sur des romans)
+la **continuation** d'un texte. Ce n'est ni un modèle conversationnel ni un modèle de storytelling : il ne suit
+aucune instruction et ne garantit aucune cohérence. Spécialité du registre : `text-continuation` (id `mini-llm`,
+capacité TEXT seule). Qwen reste le modèle principal.
+
+- Fonction `story_generate(primer, length)` : Qwen rédige une **amorce littéraire** (pas la demande brute) que
+  mini-llm prolonge ; Qwen présente le résultat comme une expérimentation.
+- Garde d'intention sur le message original : seul un ordre direct (« Raconte-moi une histoire sur… ») est accepté ;
+  questions, négations et conditionnels sont refusés. Pas de repli sur Qwen (`fallback="error"`).
+- Exécution dans un sous-processus avec le Python de mini-llm (`tools/minillm_bridge.py`), sans importer son code
+  dans Jarvis. Désactivé tant que `JARVIS_MINILLM_DIR` est vide ; fichiers manquants : modèle désactivé + avertissement.
+- Variables : `JARVIS_MINILLM_DIR`, `JARVIS_MINILLM_PYTHON`, `JARVIS_MINILLM_CHECKPOINT`
+  (défaut `models/checkpoints/livres_P4_theatre_meilleur.pt`), `JARVIS_MINILLM_TOKENIZER`, `JARVIS_MINILLM_TIMEOUT`.
+
+## Traçabilité (JSONL)
+
+Chaque requête (`/chat`, `/voice/chat`) reçoit un `request_id` unique ; tous les événements (modèle choisi et
+raison du routage/repli, appels Qwen et modèles spécialisés, fonctions, gardes d'intention acceptés/refusés,
+adaptateurs, Kensaku) sont écrits en JSONL dans `data/logs/trace.jsonl` (rotation 5 Mo × 5, ignoré par git) avec
+`seq`, `component`, `status` et `duration_ms` (horloge monotone). `via_function` rattache un appel spécialisé à
+sa fonction. Les tâches du planificateur ont `request_id: null`.
+
+Confidentialité : ni message, ni prompt, ni amorce, ni réponse, ni chemin ou contenu de document ; erreurs
+tronquées à 200 caractères, chemins masqués. Une panne de traçabilité n'affecte jamais une requête.
+
+```bash
+python -m app.core.tracing last [-n 10]          # dernières requêtes
+python -m app.core.tracing show <request_id>     # chronologie (préfixe accepté, rotations incluses)
+```
+
+Variables : `JARVIS_TRACE` (1/0), `JARVIS_TRACE_PATH`, `JARVIS_TRACE_MAX_BYTES`, `JARVIS_TRACE_BACKUPS`.
+Limite : un seul processus Uvicorn (la rotation du fichier n'est pas sûre avec plusieurs processus).
+
+## Fichier `.env`
+
+L'application lit `.env` (racine du projet) au démarrage, y compris via `start-jarvis.sh`. Les variables déjà
+présentes dans l'environnement gardent la priorité, même vides ; un fichier absent est ignoré.
+`JARVIS_ENV_FILE=<chemin>` choisit un autre fichier, `JARVIS_ENV_FILE=` (vide) désactive le chargement.
+Syntaxe minimale : `CLE=valeur`, `export` facultatif, commentaires `#` en début de ligne, guillemets autour de la
+valeur. Limites : pas d'expansion de variables (`$X`), pas de substitution de commande, pas d'exécution de code
+(la valeur est du texte littéral), pas de commentaire en fin de ligne. Au démarrage, un log INFO/WARNING indique si
+mini-llm est activé (checkpoint) ou pourquoi il est désactivé (non configuré, répertoire, environnement Python,
+checkpoint, tokenizer ou script introuvables).
+
+Le garde d'intention de `story_generate` analyse la structure de la phrase : ordre direct en tête de message
+(« Raconte-moi une histoire sur… »), sans condition, envie ni moment indéterminé (« si tu veux », « un jour »)
+après le nom ni dans une proposition séparée par une virgule ; un contexte placé AVANT l'ordre fait refuser
+(ambiguïté = refus).
 
 ## Tests
     pytest

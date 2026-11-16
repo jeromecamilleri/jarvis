@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
+from app.core.model_adapter import TEXT_AND_TOOLS, ModelResponse
 from app.core.commands import REMINDER_CLAIM_CORRECTION, claims_reminder_set
 from app.core.reminder_parser import parse_reminder
 from app.core.reminders import AudioNotifier
@@ -39,12 +40,14 @@ class Notifier:
 
 
 class LLM:
+    capabilities = TEXT_AND_TOOLS
+
     def __init__(self, reply="réponse de test"):
         self.calls, self.reply = [], reply
 
-    def chat(self, messages):
-        self.calls.append(messages)
-        return self.reply
+    def generate(self, request):
+        self.calls.append(request.messages)
+        return ModelResponse(self.reply)
 
 
 def build(db_path, clock=None, notifier=None, llm=None):

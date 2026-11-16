@@ -3,17 +3,20 @@ import pytest
 
 from app.core.commands import (MEMORY_CLAIM_CORRECTION, MEMORY_INTENT_REPLY, NOT_STORED_NOTICE,
                                claims_memory_write, parse_command)
+from app.core.model_adapter import TEXT_AND_TOOLS, ModelResponse
 from app.core.orchestrator import SYSTEM_PROMPT
 from app.memory.profile import ProfileStore
 
 
 class ScriptedLLM:
+    capabilities = TEXT_AND_TOOLS
+
     def __init__(self, reply="réponse de test"):
         self.reply, self.calls = reply, []
 
-    def chat(self, messages):
-        self.calls.append(messages)
-        return self.reply
+    def generate(self, request):
+        self.calls.append(request.messages)
+        return ModelResponse(self.reply)
 
 
 def say(client, message, cid=None):

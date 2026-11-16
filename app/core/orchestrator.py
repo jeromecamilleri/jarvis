@@ -7,8 +7,11 @@ import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from app.core import tracing
 from app.core.budget import estimate_tokens, truncate_middle
 from app.core.function_registry import FunctionRegistry
+from app.core.model_adapter import TEXT, TOOLS, ModelAdapter, ModelRequest
+from app.core.model_router import ModelRouter, RoutingRequest
 from app.core.triggers import is_past_reference
 from app.memory.conversations import ConversationStore
 from app.memory.profile import ProfileStore
@@ -101,12 +104,12 @@ class _DocState:
 
 
 class Orchestrator:
-    def __init__(self, llm, conversations: ConversationStore, profile: ProfileStore,
+    def __init__(self, router: ModelRouter, conversations: ConversationStore, profile: ProfileStore,
                  history_limit: int = 20, episodic=None, episodic_k: int = 5,
                  num_ctx: int = 8192, reply_reserve: int = 1024, memory_budget: int = 1500,
                  reminders=None, functions: FunctionRegistry | None = None,
                  max_tool_rounds: int = 3, timezone: str = "Europe/Paris", now=None):
-        self.llm, self.conversations, self.profile = llm, conversations, profile
+        self.router, self.conversations, self.profile = router, conversations, profile
         self.history_limit = history_limit
         self.reminders = reminders
         self.functions, self.max_tool_rounds = functions, max_tool_rounds
@@ -124,8 +127,8 @@ class Orchestrator:
         )
 
     def _tools_enabled(self) -> bool:
-        # Les LLM sans `chat_tools` (ou sans fonction enregistrée) gardent le comportement textuel.
-        return bool(self.functions) and hasattr(self.llm, "chat_tools")
+        # Sans fonction enregistrée, le comportement reste purement textuel.
+        return bool(self.functions)
 
     def _tools_section(self) -> str:
         now = self.now().astimezone(self.tz)
@@ -141,12 +144,15 @@ class Orchestrator:
         """Réponse du LLM ; boucle bornée d'appels de fonctions. Retourne (texte, non_vérifié, état documentaire) :
         non_vérifié = une fonction était requise mais non appelée."""
         docs = _DocState(self._doc_request(message), DOC_FILENAME.findall(message))
-        if not self._tools_enabled():
-            return self.llm.chat(messages), False, docs
+        # Un seul routage par tour : le même modèle sert tous les appels (fonctions, relances, réponse finale).
+        tools_on = self._tools_enabled()
+        llm = self.router.select(RoutingRequest(frozenset({TEXT, TOOLS} if tools_on else {TEXT}))).model.adapter
+        if not tools_on:
+            return self._plain(llm, messages), False, docs
         tools = self.functions.tools()
         called, hinted = False, False
         for _ in range(self.max_tool_rounds):
-            reply = self.llm.chat_tools(messages, tools)
+            reply = llm.generate(ModelRequest(messages, tools))
             if not reply.tool_calls:
                 needed = [] if called or hinted else [
                     s for s in self.functions.specs() if s.trigger and re.search(s.trigger, message, re.I)]
@@ -174,10 +180,14 @@ class Orchestrator:
                 messages.append({"role": "tool", "tool_name": call.name,
                                  "content": truncate_middle(content, TOOL_RESULT_TOKENS)})
         if hinted and not called:
-            return self.llm.chat(messages), True, docs
+            return self._plain(llm, messages), True, docs
         messages = messages + [{"role": "system", "content":
                                 "Réponds maintenant à l'utilisateur sans appeler d'autre fonction."}]
-        return self.llm.chat(messages), False, docs
+        return self._plain(llm, messages), False, docs
+
+    @staticmethod
+    def _plain(llm: ModelAdapter, messages: list[dict]) -> str:
+        return llm.generate(ModelRequest(messages, require_content=True)).content
 
     def _doc_request(self, message: str) -> bool:
         return (any(s.document == "read" for s in self.functions.specs()) and bool(DOC_REQUEST.search(message)))
@@ -194,6 +204,12 @@ class Orchestrator:
         )
 
     def chat(self, message: str, conversation_id: int | None = None) -> tuple[int, str]:
+        with tracing.request_scope(message_chars=len(message), conversation_id=conversation_id):
+            cid, reply = self._chat(message, conversation_id)
+            tracing.annotate(conversation_id=cid, reply_chars=len(reply))
+            return cid, reply
+
+    def _chat(self, message: str, conversation_id: int | None = None) -> tuple[int, str]:
         if conversation_id is None or not self.conversations.exists(conversation_id):
             conversation_id = self.conversations.create()
 
@@ -201,8 +217,11 @@ class Orchestrator:
         reply = None
         if cmd:
             reply = self._run_command(cmd)
+            tracing.annotate(path="command")
         elif self.reminders is not None:
             reply = self.reminders.handle(message)
+            if reply is not None:
+                tracing.annotate(path="reminder")
         if reply is not None:
             self.conversations.add_message(conversation_id, "user", message, "command")
             self.conversations.add_message(conversation_id, "assistant", reply, "command")
@@ -232,6 +251,7 @@ class Orchestrator:
 
         messages = [{"role": "system", "content": system}, *history,
                     {"role": "user", "content": prompt_message}]
+        tracing.annotate(path="llm")
         llm_reply, unverified, docs = self._generate(messages, message)
         reply = llm_reply
         if unverified:

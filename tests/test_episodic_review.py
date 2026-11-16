@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.core.budget import estimate_tokens
+from app.core.function_registry import FunctionRegistry
 from app.main import create_app
 from app.memory.database import connect
 from app.memory.episodic import EpisodicMemory, split_text
@@ -136,7 +137,7 @@ def test_failed_write_is_rolled_back_and_leaves_no_partial_chunks(tmp_path, monk
 def _client(db_path, **settings):
     llm = FakeLLM()
     cfg = Settings(db_path=db_path, embed_model="", **settings)
-    return TestClient(create_app(cfg, llm=llm)), llm, cfg
+    return TestClient(create_app(cfg, llm=llm, functions=FunctionRegistry())), llm, cfg
 
 
 def test_60000_char_message_fits_context_and_keeps_system_prompt(db_path):

@@ -49,6 +49,11 @@ Améliorations non indispensables, à traiter plus tard.
 - Lecture documentaire capable de parcourir plusieurs passages d'un même fichier (suite / pagination de `docs_read`).
 - Réflexion sur l'actualisation automatique de l'index Kensaku (watcher fermé avec l'interface, index périmé).
 
+## mini-llm (continuation de texte)
+- Garder le modèle chargé (processus persistant) si le chargement de 0,5 s par appel gêne.
+- Garde d'intention : détecter une seconde demande sans négation dans une phrase suivante.
+- Ajustement par instructions de mini-llm pour qu'il suive réellement une consigne (étape ultérieure).
+
 ## Idées générales
 - Interface texte en complément de la voix (page minimale `/ask` faite ; reste : historique, rendu Markdown).
 - Amélioration du vocabulaire technique de Whisper (termes techniques, noms de fichiers et de code).
